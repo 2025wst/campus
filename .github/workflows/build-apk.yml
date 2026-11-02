@@ -45,6 +45,14 @@ jobs:
           npx cap add android
           npx cap sync android
 
+      - name: 换成我们的图标
+        run: |
+          mkdir -p android/app/src/main/res/drawable
+          cp icon-512.png android/app/src/main/res/drawable/ic_launcher.png
+          sed -i 's|android:icon="@mipmap/ic_launcher"|android:icon="@drawable/ic_launcher"|' android/app/src/main/AndroidManifest.xml
+          sed -i 's|android:roundIcon="@mipmap/ic_launcher_round"|android:roundIcon="@drawable/ic_launcher"|' android/app/src/main/AndroidManifest.xml
+          grep -n 'android:icon' android/app/src/main/AndroidManifest.xml
+
       - name: 编译 APK
         run: |
           cd android
