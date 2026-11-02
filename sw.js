@@ -1,24 +1,13 @@
-/* 校园通 service worker —— 离线缓存应用外壳。
- * 改了代码记得把 VERSION 加一，否则手机上还是旧版本。
+/* 校园通（单文件版）service worker —— 只缓存根目录这几个文件。
+ * 改了 index.html 记得把 VERSION 加一，否则手机上还是旧版。
  */
-const VERSION = 'campus-v1';
+const VERSION = 'campus-v2';
 const SHELL = [
   './',
   './index.html',
-  './app.css',
   './manifest.webmanifest',
-  './assets/icon-192.png',
-  './assets/icon-512.png',
-  './src/main.js',
-  './src/util/date.js',
-  './src/util/store.js',
-  './src/util/format.js',
-  './src/features/timetable/data.js',
-  './src/features/timetable/view.js',
-  './src/features/expense/view.js',
-  './src/features/expense/import.js',
-  './src/features/todo/view.js',
-  './src/features/settings/view.js',
+  './icon-192.png',
+  './icon-512.png',
 ];
 
 self.addEventListener('install', (event) => {
