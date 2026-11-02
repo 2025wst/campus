@@ -2882,8 +2882,11 @@ function renderSettings(root) {
     const sheet = h('div.sheet', [
       h('div.grab'),
       h('h2', '导入课表'),
-      h('p.muted', { style: { margin: '4px 0 10px' } },
-        '把教务系统课表页 Ctrl+A 全选、Ctrl+C 复制，粘到下面框里。只读你粘贴的内容，不会登录学校系统、也不要账号密码。'),
+      h('div', { style: { height: '10px' } }),
+      h('button.btn.block.primary', { onclick: openSchool }, '① 打开教务平台，登录后复制课表'),
+      h('div', { style: { height: '8px' } }),
+      h('p.muted', { style: { margin: '0 0 10px' } },
+        '打开教务平台后登录，进「我的课表」，Ctrl+A 全选再 Ctrl+C 复制，回到这里粘到下面框里。只读你粘贴的内容，不要账号密码。'),
       box,
       h('div', { style: { height: '10px' } }),
       h('button.btn.block.ghost', { onclick: preview }, '先预览'),
@@ -2902,6 +2905,16 @@ function renderSettings(root) {
 
     mask.appendChild(sheet);
     document.body.appendChild(mask);
+
+    function openSchool() {
+      const url = 'https://jwxt.zzu.edu.cn/manager/secondary-portal';
+      try {
+        const w = window.open(url, '_blank');
+        if (!w) location.href = url;
+      } catch {
+        location.href = url;
+      }
+    }
 
     function preview() {
       parsed = null;
