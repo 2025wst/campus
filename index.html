@@ -1337,6 +1337,319 @@ function coursesInWeek(courses, week) {
 
  return { COLOR_TOKENS, SEED_COURSES, activeInWeek, coursesOn, coursesInWeek }; })();
 
+__mod["src/features/timetable/eams.js"] = (function(){ /**
+ * 书签脚本的核心：在教务平台的课表页里执行，把课表读成课程 JSON 并拼出跳转地址。
+ *
+ * 已按郑州大学教务平台（EAMS / jwxt.zzu.edu.cn）的真实结构适配：
+ *   - 课表在一个 <iframe src=".../course-table.html"> 里；
+ *   - 表格内容是 td.td-content + div.tdHtml 卡片：
+ *       <div class="course-name">模拟电子技术</div>
+ *       <div>243060-001</div>
+ *       <div>(1~4,6~17周) (1-2节) 主校区 环_306  李浩亮</div>
+ *   - 实验课一个格子里塞多段，每段带自己的周次：(1周)/(3周)/…
+ *
+ * 设计约束：完全自包含（书签里不能 import），只读 DOM。
+ */
+
+const WD = '一二三四五六日';
+
+function textOf(el) {
+  return (el.innerText || el.textContent || '').replace(/\u00a0/g, ' ').trim();
+}
+
+/** 周次：支持「1~4,6~17周」「(16周)」「1-16周」。取所有区间的并集上下界。 */
+function parseWeeks(s) {
+  const str = String(s || '');
+  const segMatch = str.match(/[\d\s\-~—–至,，]+周/);
+  const scope = segMatch ? segMatch[0] : '';
+  let start = 1;
+  let end = 18;
+  if (scope) {
+    let minS = Infinity;
+    let maxE = -Infinity;
+    const re = /(\d+)\s*(?:[-~—–至]\s*(\d+))?/g;
+    let m;
+    while ((m = re.exec(scope))) {
+      const a = Number(m[1]);
+      const b = m[2] ? Number(m[2]) : a;
+      minS = Math.min(minS, a);
+      maxE = Math.max(maxE, b);
+    }
+    if (Number.isFinite(minS)) {
+      start = minS;
+      end = maxE;
+    }
+  }
+  let parity = 'all';
+  if (/单周|\(单\)|（单）/.test(str)) parity = 'odd';
+  else if (/双周|\(双\)|（双）/.test(str)) parity = 'even';
+  return { start, end: Math.max(start, end), parity };
+}
+
+/** 节次：支持「(1-2节)」「第1-2节」「1~4节」「3,4」 */
+function parsePeriods(s) {
+  const str = String(s || '');
+  const m = str.match(/(\d+)\s*[-~—–至]\s*(\d+)\s*节/);
+  if (m) return { start: Number(m[1]), end: Number(m[2]) };
+  const one = str.match(/(\d+)\s*节/);
+  if (one) return { start: Number(one[1]), end: Number(one[1]) };
+  const pair = str.match(/(\d+)\s*[,，、]\s*(\d+)/);
+  if (pair) return { start: Number(pair[1]), end: Number(pair[2]) };
+  return null;
+}
+
+function looksPlace(t) {
+  return /[楼室场馆]|_\d|[A-Za-z]\d{2,4}/.test(String(t));
+}
+
+/** 从「主校区 环_306  李浩亮」里拆地点和老师 */
+function splitRoomTeacher(info) {
+  const raw = String(info || '');
+  const cleaned = raw
+    .replace(/[#＆&]\d+[、.．]?/g, ' ')
+    .replace(/人数[:：]?\s*\d+\s*\/\s*\d+/g, ' ')
+    .replace(/[(（][^)）]*[)）]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const tokens = cleaned.split(' ').filter((t) => t && !/[:：/]/.test(t));
+  let room = tokens.find(looksPlace) || '';
+  // 实验课没有固定教室，只有「（503）」这种实验室编号
+  if (!room) {
+    const lab = raw.match(/[（(](\d{3,4})[)）]/);
+    if (lab) room = lab[1];
+  }
+  if (!room) {
+    const campus = tokens.find((t) => /校区/.test(t));
+    if (campus) room = campus;
+  }
+  let teacher = '';
+  for (let i = tokens.length - 1; i >= 0; i--) {
+    const t = tokens[i];
+    if (t !== room && t.length <= 4 && !/\d/.test(t) && !/校区|实验|练习/.test(t)) {
+      teacher = t;
+      break;
+    }
+  }
+  return { room, teacher };
+}
+
+/* ---------------- 郑州大学 EAMS 结构 ---------------- */
+
+function parseEamsDoc(doc) {
+  const cells = doc.querySelectorAll('td.td-content');
+  if (!cells.length) return [];
+
+  const courses = [];
+  for (const td of cells) {
+    const cls = td.className || '';
+    const dayMatch = cls.match(/td-content\s+(\d+)/);
+    if (!dayMatch) continue;
+    const day = Number(dayMatch[1]);
+    if (!(day >= 1 && day <= 7)) continue;
+
+    for (const block of td.querySelectorAll('div.tdHtml')) {
+      const nameEl = block.querySelector('.course-name');
+      const name = nameEl ? textOf(nameEl) : '';
+      if (!name) continue;
+
+      // 含「周」的那个子节点才是信息行（div 或 span）
+      const infoEl = [...block.children].find(
+        (el) =>
+          /周/.test(el.textContent || '') &&
+          !el.classList.contains('course-name') &&
+          !el.classList.contains('lesson-name')
+      );
+      const info = (infoEl ? infoEl.textContent : block.textContent).replace(/\u00a0/g, ' ');
+      if (!/周/.test(info)) continue;
+
+      const periods = parsePeriods(info);
+      if (!periods) continue;
+
+      const { room, teacher } = splitRoomTeacher(info);
+      courses.push({
+        name,
+        short: name.slice(0, 4),
+        day,
+        start: Math.min(periods.start, periods.end),
+        end: Math.max(periods.start, periods.end),
+        room,
+        teacher,
+        weeks: parseWeeks(info),
+        color: 'blue',
+      });
+    }
+  }
+  return courses;
+}
+
+/* ---------------- 通用表格结构（其他学校/旧版页面） ---------------- */
+
+function textOfCell(el) {
+  const clone = el.cloneNode(true);
+  for (const br of clone.querySelectorAll('br')) br.replaceWith('\n');
+  return (clone.textContent || '').replace(/\u00a0/g, ' ');
+}
+
+function parseTableDoc(doc) {
+  const tables = [...doc.querySelectorAll('table')];
+  const table = tables.find((t) => /星期[一二三四五六日]/.test(textOf(t)));
+  if (!table) return [];
+
+  const rows = [...table.rows];
+  const headIdx = rows.findIndex((r) => /星期[一二三四五六日]/.test(textOf(r)));
+  if (headIdx < 0) return [];
+
+  const days = {};
+  [...rows[headIdx].cells].forEach((cell, i) => {
+    const m = textOf(cell).match(/星期\s*([一二三四五六日])/);
+    if (m) days[i] = WD.indexOf(m[1]) + 1;
+  });
+
+  const carry = {};
+  const courses = [];
+  for (let ri = headIdx + 1; ri < rows.length; ri++) {
+    const cells = [...rows[ri].cells];
+    const row = {};
+    for (const k of Object.keys(carry)) {
+      if (carry[k].left > 0) {
+        row[k] = carry[k].lines;
+        carry[k].left -= 1;
+      }
+    }
+    let col = 0;
+    for (const cell of cells) {
+      while (row[col] !== undefined) col += 1;
+      const lines = textOfCell(cell)
+        .split(/\n+/)
+        .map((s) => s.replace(/\s+/g, ' ').trim())
+        .filter(Boolean);
+      row[col] = lines;
+      const rs = cell.rowSpan || 1;
+      if (rs > 1) carry[col] = { left: rs - 1, lines };
+      col += cell.colSpan || 1;
+    }
+
+    const firstLines = row[0] || [];
+    const bare = (firstLines[0] || '').trim();
+    const rowPeriods =
+      parsePeriods(firstLines.join(' ')) || (/^\d{1,2}$/.test(bare) ? { start: Number(bare), end: Number(bare) } : null);
+    if (!rowPeriods) continue;
+
+    for (const key of Object.keys(row)) {
+      const day = days[key];
+      if (!day) continue;
+      const lines = row[key];
+      if (!lines || !lines.length) continue;
+      const name = lines[0];
+      if (!name || /^(无|—|-|\/)$/.test(name)) continue;
+      const joined = lines.join(' ');
+      const weeksInfo = lines.find((l) => /周/.test(l)) || joined;
+      const periods = parsePeriods(joined) || rowPeriods;
+      const { room, teacher } = splitRoomTeacher(weeksInfo);
+      courses.push({
+        name,
+        short: name.slice(0, 4),
+        day,
+        start: Math.min(periods.start, periods.end),
+        end: Math.max(periods.start, periods.end),
+        room,
+        teacher,
+        weeks: parseWeeks(weeksInfo),
+        color: 'blue',
+      });
+    }
+  }
+  return courses;
+}
+
+/* ---------------- 合并 + 生成跳转地址 ---------------- */
+
+/**
+ * App 内抓取用：原生注入脚本只抽「课程名 / 信息行 / 星期」，
+ * 这里把原始行还原成课程（周次、节次、地点、教师）。
+ *
+ * @param {Array<{name:string, info:string, day:number}>} rows
+ */
+function rowsToCourses(rows) {
+  const list = [];
+  for (const row of rows || []) {
+    const name = String(row.name || '').trim();
+    const info = String(row.info || '').replace(/\u00a0/g, ' ');
+    const day = Number(row.day) || 0;
+    if (!name || !(day >= 1 && day <= 7) || !/周/.test(info)) continue;
+    const periods = parsePeriods(info);
+    if (!periods) continue;
+    const { room, teacher } = splitRoomTeacher(info);
+    list.push({
+      name,
+      short: name.slice(0, 4),
+      day,
+      start: Math.min(periods.start, periods.end),
+      end: Math.max(periods.start, periods.end),
+      room,
+      teacher,
+      weeks: parseWeeks(info),
+      color: 'blue',
+    });
+  }
+  return mergeCourses(list);
+}
+
+function mergeCourses(courses) {
+  const merged = [];
+  for (const c of courses) {
+    const same = merged.find(
+      (m) => m.name === c.name && m.day === c.day && m.start === c.start && m.end === c.end && m.room === c.room
+    );
+    if (same) {
+      same.weeks.start = Math.min(same.weeks.start, c.weeks.start);
+      same.weeks.end = Math.max(same.weeks.end, c.weeks.end);
+      if (same.weeks.parity !== c.weeks.parity) same.weeks.parity = 'all';
+    } else {
+      merged.push({ ...c, weeks: { ...c.weeks } });
+    }
+  }
+  return merged;
+}
+
+/**
+ * @param {Document} doc 教务平台页面
+ * @param {string} appUrl 校园通地址
+ */
+function grabTimetable(doc, appUrl) {
+  let courses = parseEamsDoc(doc);
+
+  if (!courses.length) {
+    courses = parseTableDoc(doc);
+  }
+
+  // 课表可能在同源 iframe 里
+  if (!courses.length) {
+    for (const frame of doc.querySelectorAll('iframe')) {
+      try {
+        const inner = frame.contentDocument;
+        if (!inner) continue;
+        courses = parseEamsDoc(inner);
+        if (!courses.length) courses = parseTableDoc(inner);
+        if (courses.length) break;
+      } catch (e) {
+        /* 跨域 iframe 跳过 */
+      }
+    }
+  }
+
+  if (!courses.length) {
+    return { ok: false, reason: '页面里没找到课表（表格或 iframe 都没有命中）' };
+  }
+
+  const merged = mergeCourses(courses);
+  const json = JSON.stringify(merged);
+  const b64 = btoa(unescape(encodeURIComponent(json)));
+  return { ok: true, courses: merged, url: `${appUrl}#import=${encodeURIComponent(b64)}` };
+}
+
+ return { parseWeeks, parsePeriods, parseEamsDoc, parseTableDoc, rowsToCourses, grabTimetable }; })();
+
 __mod["src/features/timetable/edit.js"] = (function(){ /**
  * 课程编辑：底部弹出的表单，新增和修改共用。
  */
@@ -1547,7 +1860,7 @@ __mod["src/features/timetable/import.js"] = (function(){ /**
  *   A. 网页表格（浏览器里 Ctrl+A / Ctrl+C 复制的 HTML，含 <table>）
  *   B. Excel / 纯文本：Tab 或逗号分隔，第一行是「节次、星期一…」
  */
-
+const { parseEamsDoc } = __mod["src/features/timetable/eams.js"];
 const WD = '一二三四五六日';
 
 /** 从「1-16周」「1-8周(单)」「第3周」这类文字里抽出周次。 */
@@ -1684,6 +1997,28 @@ function expandTable(table) {
 function parseTimetableHTML(html) {
   if (typeof DOMParser === 'undefined') throw new Error('需要浏览器环境');
   const doc = new DOMParser().parseFromString(String(html), 'text/html');
+
+  // 郑州大学教务平台（EAMS）的课表页：td.td-content + div.tdHtml
+  try {
+    const eams = parseEamsDoc(doc);
+    if (eams.length) {
+      return {
+        courses: eams.map((c) => ({
+          name: c.name,
+          day: c.day,
+          start: c.start,
+          end: c.end,
+          room: c.room,
+          teacher: c.teacher,
+          weeks: c.weeks,
+        })),
+        note: `从教务平台结构里识别出 ${eams.length} 门课`,
+      };
+    }
+  } catch (err) {
+    console.warn('[import] EAMS 解析失败，回退到通用表格', err);
+  }
+
   const tables = [...doc.querySelectorAll('table')];
 
   for (const table of tables) {
@@ -2908,6 +3243,16 @@ function renderSettings(root) {
 
     function openSchool() {
       const url = 'https://jwxt.zzu.edu.cn/manager/secondary-portal';
+      // 装在 App 里时，用原生窗口打开（那里能在页面右下角注入「导入」按钮）
+      const plugins = window.Capacitor && window.Capacitor.Plugins;
+      const native = plugins && plugins.TimetableImport;
+      if (native && typeof native.open === 'function') {
+        close();
+        native.open({ url }).catch(() => {
+          location.href = url;
+        });
+        return;
+      }
       try {
         const w = window.open(url, '_blank');
         if (!w) location.href = url;
@@ -3082,6 +3427,7 @@ const { renderTimetable } = __mod["src/features/timetable/view.js"];
 const { renderExpense } = __mod["src/features/expense/view.js"];
 const { renderTodo } = __mod["src/features/todo/view.js"];
 const { renderSettings } = __mod["src/features/settings/view.js"];
+const { rowsToCourses } = __mod["src/features/timetable/eams.js"];
 const ROUTES = {
   timetable: { title: '课表', render: renderTimetable },
   expense: { title: '记账', render: renderExpense },
@@ -3158,6 +3504,33 @@ function consumeImportHash() {
 }
 
 consumeImportHash();
+
+/**
+ * App 内一键抓取的回调：原生（ImportActivity）拿到页面里的原始行后，
+ * 通过 evaluateJavascript 调这里，解析成课程并入库。
+ * @param {string|Array} raw
+ */
+window.__campusImport = function (raw) {
+  try {
+    const rows = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    const courses = rowsToCourses(rows);
+    if (!courses.length) {
+      toast('没解析出课程，确认已经打开「我的课表」再点导入', 2600);
+      return false;
+    }
+    update((s) => {
+      s.courses = courses.map((c, i) => ({ id: `imp-${Date.now()}-${i}`, ...c }));
+      s.ui.week = null;
+    });
+    location.hash = '#/timetable';
+    toast(`已导入 ${courses.length} 门课`);
+    return true;
+  } catch (err) {
+    console.warn('[import] 原生抓取数据解析失败', err);
+    toast('导入失败：' + err.message, 2600);
+    return false;
+  }
+};
 
 /* 首次打开：灌入课表 */
 seedIfEmpty(SEED_COURSES);
