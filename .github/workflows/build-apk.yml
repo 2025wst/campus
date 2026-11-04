@@ -54,10 +54,12 @@ jobs:
           PAGE=https://2025wst.github.io/campus
           curl -fsSL -o "$D/TimetablePlugin.java" "$RAW/TimetablePlugin.java" || curl -fsSL -o "$D/TimetablePlugin.java" "$PAGE/TimetablePlugin.java"
           curl -fsSL -o "$D/MainActivity.java" "$RAW/MainActivity.java" || curl -fsSL -o "$D/MainActivity.java" "$PAGE/MainActivity.java"
+          curl -fsSL -o "$D/ExpenseListener.java" "$RAW/ExpenseListener.java" || curl -fsSL -o "$D/ExpenseListener.java" "$PAGE/ExpenseListener.java"
           wc -l "$D"/*.java
           head -3 "$D/TimetablePlugin.java"
+          sed -i '0,/<activity/s//<service android:name=".ExpenseListener" android:exported="false" android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"><intent-filter><action android:name="android.service.notification.NotificationListenerService" \/><\/intent-filter><\/service>\n        <activity/' android/app/src/main/AndroidManifest.xml
           sed -i '0,/<activity/s//<activity android:name=".TimetablePlugin$ImportActivity" android:exported="false" \/>\n        <activity/' android/app/src/main/AndroidManifest.xml
-          grep -n 'ImportActivity' android/app/src/main/AndroidManifest.xml
+          grep -n 'ImportActivity\|ExpenseListener' android/app/src/main/AndroidManifest.xml
 
       - name: 换成我们的图标
         run: |
