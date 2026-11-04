@@ -2636,18 +2636,40 @@ function parseCSVLocal(text) {
 __mod["src/features/expense/auto.js"] = (function(){ /**
  * 自动记账：把微信/支付宝的通知文字解析成一笔支出。
  *
- * 原生只负责把通知原文（title/text）送进来，规则全在这里，
- * 想加一种新文案只改这个文件。
+ * 规则来自真机抓到的通知原文（2026-11），例如：
+ *   支付宝「交易提醒」：你在智能自助服务有一笔0.07元的免密/自动扣款支付，点击领取6个支付宝积分。
+ *   支付宝「交易提醒」：你有一笔9.89元的支出，点击领取2个支付宝积分。
+ *   微信「微信支付」：向 二食堂 付款 12.50 元
+ *
+ * 原生只负责把通知原文（title/text）送进来，规则全在这里。
  */
 
-/** 像支付通知的关键词；微信的聊天消息也会走通知，必须靠它过滤。 */
-const PAY_WORDS = /(付款|支付|收款|到账|转账|消费|退款|红包)/;
+/** 像支付通知的关键词（微信聊天消息也会走通知，必须靠它过滤）。 */
+const PAY_WORDS = /(支付|付款|支出|扣款|消费|交易|转账|收款|到账|退款)/;
 
 /** 收入方向（v1 只记支出，收入先不落账）。 */
-const INCOME_WORDS = /(收款|到账|退款|红包|收入|转入|入账)/;
+const INCOME_WORDS = /(收款|到账|退款|收入|转入|入账|红包)/;
 
 /** 金额：「¥12.50」「12.50元」「￥12」 */
 const AMOUNT_RE = /(?:¥|￥)\s*(\d{1,6}(?:\.\d{1,2})?)|(\d{1,6}(?:\.\d{1,2})?)\s*元/;
+
+/** 明显不是消费的营销文案（注意：不要用「积分」「点击领取」，真实支付通知里也带这些词）。 */
+const NOISE = /(红包[^。]{0,8}(失效|可用)|优惠券|立减金|免费领取|领红包)/;
+
+/** 从各种句式里猜商户名。 */
+function pickMerchant(text) {
+  const patterns = [
+    /(?:向|在)\s*([^\s，,。:：]{2,20})\s*(?:付款|支付|消费|转账|支出|有一笔|购买)/,
+    /(?:商户|商家)[-—:：\s]*([^\s，,。]{2,20})/,
+    /(?:支付给|付款给)\s*([^\s，,。]{2,20})/,
+    /(?:支付宝|微信支付)[:：]\s*([^\s，,。]{2,20})/,
+  ];
+  for (const re of patterns) {
+    const m = text.match(re);
+    if (m && m[1] && !/^\d+$/.test(m[1])) return m[1].trim();
+  }
+  return '';
+}
 
 /**
  * @param {{pkg?:string,title?:string,text?:string,at?:number}} n
@@ -2663,18 +2685,11 @@ function parseNotify(n) {
   const amount = Number(m[1] || m[2]);
   if (!(amount > 0) || amount > 100000) return null;
 
+  // 「4元红包今晚失效」这类营销消息不记账
+  if (NOISE.test(text) && !/支出|支付成功|付款|扣款/.test(text)) return null;
+
   const income = INCOME_WORDS.test(text);
-
-  // 商户：优先「向 X 付款」「在 X 消费」，其次「支付宝：X」
-  let merchant = '';
-  const m1 = text.match(/(?:向|在)\s*([^\s,，。]{2,20}?)(?:付款|支付|消费|转账|处)/);
-  if (m1) merchant = m1[1];
-  if (!merchant) {
-    const m2 = text.match(/(?:支付宝|微信支付)[:：]\s*([^\s,，。]{2,20})/);
-    if (m2) merchant = m2[1];
-  }
-
-  return { amount, income, merchant: merchant || '', text };
+  return { amount, income, merchant: pickMerchant(text), text };
 }
 
  return { parseNotify }; })();
