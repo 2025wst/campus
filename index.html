@@ -2633,6 +2633,52 @@ function parseCSVLocal(text) {
 
  return { CATEGORIES, CATEGORY_MAP, categorize, parseStatement }; })();
 
+__mod["src/features/expense/auto.js"] = (function(){ /**
+ * 自动记账：把微信/支付宝的通知文字解析成一笔支出。
+ *
+ * 原生只负责把通知原文（title/text）送进来，规则全在这里，
+ * 想加一种新文案只改这个文件。
+ */
+
+/** 像支付通知的关键词；微信的聊天消息也会走通知，必须靠它过滤。 */
+const PAY_WORDS = /(付款|支付|收款|到账|转账|消费|退款|红包)/;
+
+/** 收入方向（v1 只记支出，收入先不落账）。 */
+const INCOME_WORDS = /(收款|到账|退款|红包|收入|转入|入账)/;
+
+/** 金额：「¥12.50」「12.50元」「￥12」 */
+const AMOUNT_RE = /(?:¥|￥)\s*(\d{1,6}(?:\.\d{1,2})?)|(\d{1,6}(?:\.\d{1,2})?)\s*元/;
+
+/**
+ * @param {{pkg?:string,title?:string,text?:string,at?:number}} n
+ * @returns {{amount:number, income:boolean, merchant:string, text:string}|null}
+ */
+function parseNotify(n) {
+  if (!n) return null;
+  const text = `${n.title || ''} ${n.text || ''}`.replace(/\s+/g, ' ').trim();
+  if (!text || !PAY_WORDS.test(text)) return null;
+
+  const m = text.match(AMOUNT_RE);
+  if (!m) return null;
+  const amount = Number(m[1] || m[2]);
+  if (!(amount > 0) || amount > 100000) return null;
+
+  const income = INCOME_WORDS.test(text);
+
+  // 商户：优先「向 X 付款」「在 X 消费」，其次「支付宝：X」
+  let merchant = '';
+  const m1 = text.match(/(?:向|在)\s*([^\s,，。]{2,20}?)(?:付款|支付|消费|转账|处)/);
+  if (m1) merchant = m1[1];
+  if (!merchant) {
+    const m2 = text.match(/(?:支付宝|微信支付)[:：]\s*([^\s,，。]{2,20})/);
+    if (m2) merchant = m2[1];
+  }
+
+  return { amount, income, merchant: merchant || '', text };
+}
+
+ return { parseNotify }; })();
+
 __mod["src/features/expense/view.js"] = (function(){ /**
  * 记账页面：快速记一笔 + 月度汇总 + 账单导入。
  */
@@ -2665,6 +2711,36 @@ function renderExpense(root) {
       ]),
     ])
   );
+
+  /* 自动记账状态 */
+  const autoStatus = h('div.tiny', '检测中…');
+  const autoBtn = h('button.btn.sm.primary', { onclick: () => openAutoSettings() }, '设置');
+  frag.appendChild(
+    h('div.card.tight', { style: { display: 'flex', alignItems: 'center', gap: '10px' } }, [
+      h('div.grow', [
+        h('div', { style: { fontSize: '14px', fontWeight: '600' } }, '自动记账'),
+        autoStatus,
+      ]),
+      autoBtn,
+    ])
+  );
+
+  const nativePlugin = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.TimetableImport;
+  if (nativePlugin && typeof nativePlugin.notificationStatus === 'function') {
+    nativePlugin
+      .notificationStatus()
+      .then((r) => {
+        autoStatus.textContent = r && r.enabled
+          ? '已开启 · 微信/支付宝付款后自动记一笔'
+          : '未开启 · 点右边去开「通知使用权」';
+      })
+      .catch(() => {
+        autoStatus.textContent = '状态读取失败';
+      });
+  } else {
+    autoStatus.textContent = '只在 App 里可用（网页没有通知权限）';
+    autoBtn.style.display = 'none';
+  }
 
   /* 汇总 */
   frag.appendChild(
@@ -2727,6 +2803,14 @@ function renderExpense(root) {
   root.replaceChildren(frag);
 
   /* ---------- 内部函数 ---------- */
+
+  function openAutoSettings() {
+    if (nativePlugin && typeof nativePlugin.openNotificationSettings === 'function') {
+      nativePlugin.openNotificationSettings().catch((e) => toast('打不开设置：' + e, 2600));
+      return;
+    }
+    toast('自动记账需要在 App 里使用', 2400);
+  }
 
   function shiftMonth(delta) {
     const [y, m] = month.split('-').map(Number);
@@ -3563,6 +3647,10 @@ const { renderExpense } = __mod["src/features/expense/view.js"];
 const { renderTodo } = __mod["src/features/todo/view.js"];
 const { renderSettings } = __mod["src/features/settings/view.js"];
 const { rowsToCourses } = __mod["src/features/timetable/eams.js"];
+const { parseNotify } = __mod["src/features/expense/auto.js"];
+const { categorize } = __mod["src/features/expense/import.js"];
+const { todayISO, toISO } = __mod["src/util/date.js"];
+const { uid } = __mod["src/util/store.js"];
 const ROUTES = {
   timetable: { title: '课表', render: renderTimetable },
   expense: { title: '记账', render: renderExpense },
@@ -3667,8 +3755,50 @@ window.__campusImport = function (raw) {
   }
 };
 
-/* 首次打开：灌入课表 */
-seedIfEmpty(SEED_COURSES);
+/**
+ * 自动记账：原生通知监听把微信/支付宝通知原文送到这里。
+ * 解析出的支出直接入库，标 src='auto'。
+ */
+window.__campusExpense = function (raw) {
+  try {
+    const notif = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    const hit = parseNotify(notif);
+    if (!hit || hit.income) return false;
+
+    const when = new Date(Number(notif.at) || Date.now());
+    const date = toISO(when);
+    const state = getState();
+    // 去重：同一天、同金额、同商户、5 分钟内只记一次
+    const dup = state.expenses.some(
+      (e) =>
+        e.src === 'auto' &&
+        e.date === date &&
+        Math.abs((Number(e.amount) || 0) - hit.amount) < 0.01 &&
+        (e.note || '') === (hit.merchant || '') &&
+        Math.abs((Number(e.createdAt) || 0) - when.getTime()) < 5 * 60 * 1000
+    );
+    if (dup) return false;
+
+    update((s) => {
+      s.expenses.push({
+        id: uid(),
+        date,
+        amount: hit.amount,
+        category: categorize(`${hit.merchant} ${hit.text}`),
+        note: hit.merchant || '自动记账',
+        src: 'auto',
+        createdAt: when.getTime(),
+      });
+    });
+    toast(`自动记了一笔 ¥${hit.amount.toFixed(2)}`);
+    return true;
+  } catch (err) {
+    console.warn('[expense] 自动记账失败', err);
+    return false;
+  }
+};
+
+/* 首次打开：灌入课表 */seedIfEmpty(SEED_COURSES);
 
 /* 数据变化时重绘当前页（例如在弹层里删了一条记录） */
 subscribe(() => {
