@@ -1430,7 +1430,18 @@ function splitRoomTeacher(info) {
       break;
     }
   }
-  return { room, teacher };
+  // 实验课那一段的说明（「物理实验基本知识」这种），界面上当备注显示
+  let note = '';
+  if (!room) {
+    const rest = tokens
+      .filter((t) => t !== teacher && !/校区/.test(t) && t.length >= 3)
+      .join(' ')
+      .replace(/&amp;/g, '&')
+      .replace(/^[#&＆、\s\d]+/, '')
+      .trim();
+    if (rest && rest !== teacher) note = rest;
+  }
+  return { room, teacher, note };
 }
 
 /* ---------------- 郑州大学 EAMS 结构 ---------------- */
@@ -1448,35 +1459,41 @@ function parseEamsDoc(doc) {
     if (!(day >= 1 && day <= 7)) continue;
 
     for (const block of td.querySelectorAll('div.tdHtml')) {
-      const nameEl = block.querySelector('.course-name');
-      const name = nameEl ? textOf(nameEl) : '';
-      if (!name) continue;
+      // 一个 tdHtml 里可能重复出现多段（实验课每周一段），按 .course-name 切分
+      let cur = null;
+      const pushCur = () => {
+        if (!cur || !cur.name) return;
+        if (!cur.info || !/周/.test(cur.info)) return;
+        const periods = parsePeriods(cur.info);
+        if (!periods) return;
+        const { room, teacher, note } = splitRoomTeacher(cur.info);
+        courses.push({
+          name: cur.name,
+          short: cur.name.slice(0, 4),
+          day,
+          start: Math.min(periods.start, periods.end),
+          end: Math.max(periods.start, periods.end),
+          room,
+          teacher,
+          note,
+          weeks: parseWeeks(cur.info),
+          color: colorOf(cur.name),
+        });
+      };
 
-      // 含「周」的那个子节点才是信息行（div 或 span）
-      const infoEl = [...block.children].find(
-        (el) =>
-          /周/.test(el.textContent || '') &&
-          !el.classList.contains('course-name') &&
-          !el.classList.contains('lesson-name')
-      );
-      const info = (infoEl ? infoEl.textContent : block.textContent).replace(/\u00a0/g, ' ');
-      if (!/周/.test(info)) continue;
-
-      const periods = parsePeriods(info);
-      if (!periods) continue;
-
-      const { room, teacher } = splitRoomTeacher(info);
-      courses.push({
-        name,
-        short: name.slice(0, 4),
-        day,
-        start: Math.min(periods.start, periods.end),
-        end: Math.max(periods.start, periods.end),
-        room,
-        teacher,
-        weeks: parseWeeks(info),
-        color: 'blue',
-      });
+      for (const child of block.children) {
+        if (child.classList.contains('course-name')) {
+          pushCur();
+          cur = { name: (child.textContent || '').trim(), info: '' };
+          continue;
+        }
+        if (!cur) continue;
+        const t = (child.textContent || '').replace(/\u00a0/g, ' ');
+        if (!cur.info && /周/.test(t) && !child.classList.contains('lesson-name')) {
+          cur.info = t;
+        }
+      }
+      pushCur();
     }
   }
   return courses;
@@ -1564,9 +1581,21 @@ function parseTableDoc(doc) {
 
 /* ---------------- 合并 + 生成跳转地址 ---------------- */
 
+/** 按课程名稳定分配颜色，同一个课永远同色。 */
+const PALETTE = ['green', 'blue', 'pink', 'yellow', 'gray', 'orange', 'purple', 'teal'];
+function colorOf(name) {
+  let h = 0;
+  const s = String(name || '');
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return PALETTE[h % PALETTE.length];
+}
+
 /**
  * App 内抓取用：原生注入脚本只抽「课程名 / 信息行 / 星期」，
  * 这里把原始行还原成课程（周次、节次、地点、教师）。
+ *
+ * 同一门课在同一时间段可能有多次不同安排（实验课：每周不同地点/老师），
+ * 所以合并成一条课程 + 多条 variants，界面上可以展开看每次的安排。
  *
  * @param {Array<{name:string, info:string, day:number}>} rows
  */
@@ -1579,7 +1608,7 @@ function rowsToCourses(rows) {
     if (!name || !(day >= 1 && day <= 7) || !/周/.test(info)) continue;
     const periods = parsePeriods(info);
     if (!periods) continue;
-    const { room, teacher } = splitRoomTeacher(info);
+    const { room, teacher, note } = splitRoomTeacher(info);
     list.push({
       name,
       short: name.slice(0, 4),
@@ -1588,26 +1617,58 @@ function rowsToCourses(rows) {
       end: Math.max(periods.start, periods.end),
       room,
       teacher,
+      note,
       weeks: parseWeeks(info),
-      color: 'blue',
+      color: colorOf(name),
     });
   }
   return mergeCourses(list);
 }
 
 function mergeCourses(courses) {
-  const merged = [];
+  // 同一门课、同一时间段 → 一条课程，多次不同安排收进 variants
+  const byKey = new Map();
   for (const c of courses) {
-    const same = merged.find(
-      (m) => m.name === c.name && m.day === c.day && m.start === c.start && m.end === c.end && m.room === c.room
-    );
-    if (same) {
-      same.weeks.start = Math.min(same.weeks.start, c.weeks.start);
-      same.weeks.end = Math.max(same.weeks.end, c.weeks.end);
-      if (same.weeks.parity !== c.weeks.parity) same.weeks.parity = 'all';
+    const key = `${c.name}|${c.day}|${c.start}|${c.end}`;
+    let g = byKey.get(key);
+    if (!g) {
+      g = { ...c, weeks: { ...c.weeks }, variants: [] };
+      byKey.set(key, g);
     } else {
-      merged.push({ ...c, weeks: { ...c.weeks } });
+      g.weeks.start = Math.min(g.weeks.start, c.weeks.start);
+      g.weeks.end = Math.max(g.weeks.end, c.weeks.end);
+      if (g.weeks.parity !== c.weeks.parity) g.weeks.parity = 'all';
     }
+    g.variants.push({
+      weeks: { ...c.weeks },
+      room: c.room || '',
+      teacher: c.teacher || '',
+      note: c.note || '',
+    });
+  }
+
+  const merged = [];
+  for (const g of byKey.values()) {
+    const seen = new Set();
+    g.variants = g.variants
+      .filter((v) => {
+        const k = `${v.weeks.start}-${v.weeks.end}-${v.weeks.parity}|${v.room}|${v.teacher}|${v.note}`;
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      })
+      .sort((a, b) => a.weeks.start - b.weeks.start);
+    // 单次安排就退化成普通课程
+    if (g.variants.length === 1) {
+      g.room = g.variants[0].room;
+      g.teacher = g.variants[0].teacher;
+      g.note = g.variants[0].note;
+    } else {
+      g.room = g.variants[0].room;
+      g.teacher = g.variants[0].teacher;
+      g.note = '';
+    }
+    merged.push(g);
   }
   return merged;
 }
@@ -1648,7 +1709,7 @@ function grabTimetable(doc, appUrl) {
   return { ok: true, courses: merged, url: `${appUrl}#import=${encodeURIComponent(b64)}` };
 }
 
- return { parseWeeks, parsePeriods, parseEamsDoc, parseTableDoc, rowsToCourses, grabTimetable }; })();
+ return { parseWeeks, parsePeriods, parseEamsDoc, parseTableDoc, colorOf, rowsToCourses, grabTimetable }; })();
 
 __mod["src/features/timetable/edit.js"] = (function(){ /**
  * 课程编辑：底部弹出的表单，新增和修改共用。
@@ -2225,7 +2286,11 @@ function renderTimetable(root) {
         },
         [
           h('b', c.short || c.name),
-          shortRoom ? h('span', shortRoom) : null,
+          c.variants && c.variants.length > 1
+            ? h('span', `共${c.variants.length}次`)
+            : shortRoom
+              ? h('span', shortRoom)
+              : null,
         ]
       );
       grid.appendChild(block);
@@ -2315,14 +2380,38 @@ function chevron(dir) {  const svg = document.createElementNS('http://www.w3.org
 function openCourseSheet(course, week) {
   const tok = COLOR_TOKENS[course.color] || COLOR_TOKENS.blue;
   const mask = h('div.sheet-mask', { onclick: (e) => { if (e.target === mask) close(); } });
+  const variants = course.variants || [];
+
+  const rows = [
+    h('div.kv', [h('span', '地点'), h('span.v', course.room || '未填')]),
+    h('div.kv', [h('span', '教师'), h('span.v', course.teacher || '未填')]),
+    h('div.kv', [h('span', '周次'), h('span.v', weekLabel(course.weeks))]),
+  ];
+
+  // 多次不同安排（实验课）：每次一行，写清第几周去哪里
+  if (variants.length > 1) {
+    rows.push(
+      h('div', { style: { margin: '14px 0 6px', fontSize: '13px', color: 'var(--text-2)' } },
+        `共 ${variants.length} 次安排`),
+      h('div', { style: { borderTop: '1px solid var(--line)' } },
+        variants.map((v) =>
+          h('div', { style: { padding: '9px 0', borderBottom: '1px solid var(--line)' } }, [
+            h('div', { style: { fontSize: '13.5px', fontWeight: '600' } },
+              `${variantWeeks(v.weeks)}${v.room ? ` · ${v.room}` : ''}`),
+            v.note || v.teacher
+              ? h('div.tiny', { style: { marginTop: '2px' } }, v.note || v.teacher)
+              : null,
+          ])
+        ))
+    );
+  }
+
   const sheet = h('div.sheet', [
     h('div.grab'),
     h('h2', course.name),
     h('p.muted', { style: { margin: '2px 0 16px' } },
       `周${WEEKDAYS[course.day - 1]} 第 ${course.start}-${course.end} 节 · ${periodRange(course.start, course.end)}`),
-    h('div.kv', [h('span', '地点'), h('span.v', course.room || '未填')]),
-    h('div.kv', [h('span', '教师'), h('span.v', course.teacher || '未填')]),
-    h('div.kv', [h('span', '周次'), h('span.v', weekLabel(course.weeks))]),
+    ...rows,
     h('div', { style: { height: '14px' } }),
     h('div.row', { style: { gap: '8px' } }, [
       h('button.btn.grow.danger', {
@@ -2365,6 +2454,12 @@ function weekLabel(w) {
   if (!w) return '每周';
   const parity = w.parity === 'odd' ? '单周' : w.parity === 'even' ? '双周' : '';
   return `${w.start}-${w.end} 周${parity ? ' · ' + parity : ''}`;
+}
+
+/** 「第 3 周」「第 1-4 周 · 单周」 */
+function variantWeeks(w) {
+  const parity = w.parity === 'odd' ? ' · 单周' : w.parity === 'even' ? ' · 双周' : '';
+  return (w.start === w.end ? `第 ${w.start} 周` : `第 ${w.start}-${w.end} 周`) + parity;
 }
 
  return { renderTimetable }; })();
@@ -3123,19 +3218,52 @@ function renderSettings(root) {
     ])
   );
 
-  /* 数据 */
-  frag.appendChild(h('div.section-title', [h('span', '数据')]));
+  /* 一键入口 */
+  frag.appendChild(
+    h('div.card.hero', [
+      h('div', { style: { fontSize: '15px', fontWeight: '600' } }, '课表'),
+      h('p.muted', { style: { margin: '4px 0 12px' } },
+        '打开教务平台登录后，点右下角绿色按钮，课表自动更新。'),
+      h('button.btn.block.primary', { onclick: openSchool }, '从教务平台导入课表'),
+      h('div', { style: { height: '8px' } }),
+      h('button.btn.block.ghost', { onclick: openImportSheet }, '粘贴 / 文件导入（备用）'),
+    ])
+  );
+
+  /* 数据概览 */
   frag.appendChild(
     h('div.card', [
       h('div.kv', [h('span', '课程'), h('span.v', `${state.courses.length} 门`)]),
       h('div.kv', [h('span', '支出记录'), h('span.v', `${state.expenses.length} 条`)]),
       h('div.kv', [h('span', '待办'), h('span.v', `${state.todos.filter((t) => !t.done).length} 件未完成`)]),
-      h('div', { style: { height: '12px' } }),
+    ])
+  );
+
+  /* 高级：默认折叠，避免干扰 */
+  const advanced = h('div', { style: { display: 'none' } }, [
+    h('div.card', [
+      h('div.field', [h('label', '学期第 1 周的周一'), h('input', { type: 'date', value: state.settings.semesterStart, id: 'set-start' })]),
+      h('div.field', [h('label', '学期总周数'), h('input', { type: 'number', min: '10', max: '30', value: String(state.settings.totalWeeks), id: 'set-weeks' })]),
+      h('button.btn.block', {
+        onclick: () => {
+          const startInput = document.getElementById('set-start');
+          const weeksInput = document.getElementById('set-weeks');
+          const start = startInput.value;
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(start)) { toast('日期格式不对'); return; }
+          update((s) => {
+            s.settings.semesterStart = start;
+            s.settings.totalWeeks = Math.max(10, Math.min(30, Number(weeksInput.value) || 18));
+          });
+          toast('已保存');
+        },
+      }, '保存'),
+    ]),
+    h('div.card', [
       h('div.row', { style: { gap: '8px' } }, [
         h('button.btn.grow.ghost', {
           onclick: () => {
             download(`校园通备份-${todayISO()}.json`, exportJSON(), 'application/json');
-            toast('已导出，建议存网盘');
+            toast('已导出');
           },
         }, '导出备份'),
         h('button.btn.grow.ghost', { onclick: pickImport }, '导入备份'),
@@ -3145,23 +3273,31 @@ function renderSettings(root) {
         onclick: () => {
           const ics = buildCourseICS(getState().courses, getState().settings.semesterStart, getState().settings.totalWeeks);
           download(`我的课表-${todayISO()}.ics`, ics, 'text/calendar');
-          toast('已导出，用手机日历打开这个文件');
+          toast('已导出');
         },
-      }, '把课表导出到系统日历（上课前 10 分钟提醒）'),
-      h('div', { style: { height: '8px' } }),
-      h('button.btn.block.ghost', { onclick: openImportSheet }, '导入课表（粘贴教务系统/Excel 表格）'),
+      }, '导出课表到系统日历'),
       h('p.tiny', { style: { margin: '12px 0 0' } },
-        '所有数据只存在这台设备的浏览器里，不上传任何服务器。换设备前记得导出备份。'),
-    ])
-  );
+        '数据只存在这台设备里，不上传服务器。换设备用「导出备份 / 导入备份」。'),
+    ]),
+  ]);
+
+  const advToggle = h('button.btn.block.ghost', {
+    onclick: () => {
+      const open = advanced.style.display === 'none';
+      advanced.style.display = open ? 'block' : 'none';
+      advToggle.textContent = open ? '收起高级设置' : '高级设置';
+    },
+  }, '高级设置');
+
+  frag.appendChild(h('div', { style: { height: '4px' } }));
+  frag.appendChild(advToggle);
+  frag.appendChild(advanced);
 
   /* 关于 */
-  frag.appendChild(h('div.section-title', [h('span', '关于')]));
   frag.appendChild(
-    h('div.card', [
-      h('div.kv', [h('span', '版本'), h('span.v', '0.1.0')]),
-      h('div.kv', [h('span', '当前形态'), h('span.v', '网页应用（可添加到桌面）')]),
-      h('div', { style: { height: '12px' } }),
+    h('div.card', { style: { marginTop: '12px' } }, [
+      h('div.kv', [h('span', '版本'), h('span.v', '0.2.0')]),
+      h('div', { style: { height: '10px' } }),
       h('button.btn.block.danger', {
         onclick: () => {
           if (!confirm('会清空全部课表、记账和待办，确定吗？')) return;
@@ -3175,6 +3311,25 @@ function renderSettings(root) {
   );
 
   root.replaceChildren(frag);
+
+  /* 打开教务平台：App 内走原生窗口（能注入绿色按钮），网页里走新标签页 */
+  function openSchool() {
+    const url = 'https://jwxt.zzu.edu.cn/manager/secondary-portal';
+    const plugins = window.Capacitor && window.Capacitor.Plugins;
+    const native = plugins && plugins.TimetableImport;
+    if (native && typeof native.open === 'function') {
+      native.open({ url }).catch(() => {
+        location.href = url;
+      });
+      return;
+    }
+    try {
+      const w = window.open(url, '_blank');
+      if (!w) location.href = url;
+    } catch {
+      location.href = url;
+    }
+  }
 
   /* 导入课表：粘贴教务系统页面或 Excel 表格 */
   function openImportSheet() {
@@ -3240,26 +3395,6 @@ function renderSettings(root) {
 
     mask.appendChild(sheet);
     document.body.appendChild(mask);
-
-    function openSchool() {
-      const url = 'https://jwxt.zzu.edu.cn/manager/secondary-portal';
-      // 装在 App 里时，用原生窗口打开（那里能在页面右下角注入「导入」按钮）
-      const plugins = window.Capacitor && window.Capacitor.Plugins;
-      const native = plugins && plugins.TimetableImport;
-      if (native && typeof native.open === 'function') {
-        close();
-        native.open({ url }).catch(() => {
-          location.href = url;
-        });
-        return;
-      }
-      try {
-        const w = window.open(url, '_blank');
-        if (!w) location.href = url;
-      } catch {
-        location.href = url;
-      }
-    }
 
     function preview() {
       parsed = null;
