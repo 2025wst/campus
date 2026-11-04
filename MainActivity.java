@@ -8,7 +8,7 @@ import com.getcapacitor.BridgeActivity;
 import org.json.JSONObject;
 
 /**
- * 主 Activity：注册抓取插件，并在从「导入课表」窗口返回时，
+ * 主 Activity：注册抓取插件、初始化通知监听、并在从「导入课表」窗口返回时
  * 把抓到的原始行交给页面里的 window.__campusImport 处理。
  */
 public class MainActivity extends BridgeActivity {
@@ -17,7 +17,23 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(TimetablePlugin.class);
         super.onCreate(savedInstanceState);
+        ExpenseListener.init(getApplicationContext());
         deliver(getIntent());
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        // 回到前台：挂上 WebView，补发排队中的支付通知
+        if (getBridge() != null) {
+            ExpenseListener.attach(getBridge().getWebView());
+        }
+    }
+
+    @Override
+    public void onPause() {
+        ExpenseListener.detach();
+        super.onPause();
     }
 
     @Override

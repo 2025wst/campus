@@ -17,6 +17,7 @@ import android.widget.FrameLayout;
 
 import androidx.annotation.Nullable;
 
+import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
@@ -55,6 +56,37 @@ public class TimetablePlugin extends Plugin {
         intent.putExtra("url", url);
         activity.startActivity(intent);
         call.resolve();
+    }
+
+    /* ---------------- 自动记账：通知监听相关 ---------------- */
+
+    @PluginMethod
+    public void notificationStatus(PluginCall call) {
+        JSObject ret = new JSObject();
+        ret.put("enabled", notificationsEnabled());
+        call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void openNotificationSettings(PluginCall call) {
+        try {
+            Intent intent = new Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS");
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(intent);
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("打不开通知设置：" + e.getMessage());
+        }
+    }
+
+    private boolean notificationsEnabled() {
+        try {
+            String flat = android.provider.Settings.Secure.getString(
+                getContext().getContentResolver(), "enabled_notification_listeners");
+            return flat != null && flat.contains(getContext().getPackageName());
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     public static class ImportActivity extends Activity {
