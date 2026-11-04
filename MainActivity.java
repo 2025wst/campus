@@ -17,7 +17,6 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(TimetablePlugin.class);
         super.onCreate(savedInstanceState);
-        ExpenseListener.init(getApplicationContext());
         deliver(getIntent());
     }
 

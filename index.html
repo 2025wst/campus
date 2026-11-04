@@ -2806,7 +2806,7 @@ function renderExpense(root) {
           h('div.exp-ico', cat.icon),
           h('div.grow', [
             h('div.ellipsis', cat.name + (e.note ? ` · ${e.note}` : '')),
-            h('div.tiny', e.src === 'wechat' ? '微信导入' : e.src === 'alipay' ? '支付宝导入' : '手动记录'),
+            h('div.tiny', srcLabel(e.src)),
           ]),
           h('div.val', money(e.amount)),
         ])
@@ -2998,7 +2998,7 @@ function renderExpense(root) {
       h('h2', money(e.amount)),
       h('p.muted', { style: { margin: '2px 0 12px' } }, `${md(e.date)} · ${cat.icon} ${cat.name}`),
       h('div.kv', [h('span', '备注'), h('span.v', e.note || '—')]),
-      h('div.kv', [h('span', '来源'), h('span.v', e.src === 'wechat' ? '微信导入' : e.src === 'alipay' ? '支付宝导入' : '手动记录')]),
+      h('div.kv', [h('span', '来源'), h('span.v', srcLabel(e.src))]),
       h('div', { style: { height: '14px' } }),
       h('button.btn.block.danger', {
         onclick: () => {
@@ -3017,8 +3017,15 @@ function renderExpense(root) {
 
 /* ---------- 小工具 ---------- */
 
-function monthLabel(month) {
-  const [y, m] = month.split('-').map(Number);
+/** 账单来源的显示文案 */
+function srcLabel(src) {
+  if (src === 'auto') return '自动记账';
+  if (src === 'wechat') return '微信导入';
+  if (src === 'alipay') return '支付宝导入';
+  return '手动记录';
+}
+
+function monthLabel(month) {  const [y, m] = month.split('-').map(Number);
   return `${y} 年 ${m} 月`;
 }
 
@@ -3770,48 +3777,86 @@ window.__campusImport = function (raw) {
   }
 };
 
-/**
- * 自动记账：原生通知监听把微信/支付宝通知原文送到这里。
- * 解析出的支出直接入库，标 src='auto'。
- */
+/** 一条通知 → 一笔账单。返回是否真的入库。 */
+function applyExpense(notif) {
+  const hit = parseNotify(notif);
+  if (!hit || hit.income) return false;
+
+  const when = new Date(Number(notif.at) || Date.now());
+  const date = toISO(when);
+  const state = getState();
+  const notifKey = String(notif.key || '');
+
+  // 去重只看通知的唯一 key：
+  // 同一笔付款重复推送 → key 相同 → 跳过；
+  // 同一时间买两次（金额一样）→ key 不同 → 两笔都记。
+  const dup = notifKey
+    ? state.expenses.some((e) => e.notifKey === notifKey)
+    : state.expenses.some(
+        (e) =>
+          e.src === 'auto' &&
+          e.date === date &&
+          Math.abs((Number(e.amount) || 0) - hit.amount) < 0.01 &&
+          (e.note || '') === (hit.merchant || '') &&
+          Math.abs((Number(e.createdAt) || 0) - when.getTime()) < 10 * 1000
+      );
+  if (dup) return false;
+
+  update((s) => {
+    s.expenses.push({
+      id: uid(),
+      date,
+      amount: hit.amount,
+      category: categorize(`${hit.merchant} ${hit.text}`),
+      note: hit.merchant || '自动记账',
+      src: 'auto',
+      notifKey: notifKey || undefined,
+      createdAt: when.getTime(),
+    });
+  });
+  toast(`自动记了一笔 ¥${hit.amount.toFixed(2)}`);
+  return true;
+}
+
+/** 原生实时推过来的通知 */
 window.__campusExpense = function (raw) {
   try {
-    const notif = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    const hit = parseNotify(notif);
-    if (!hit || hit.income) return false;
-
-    const when = new Date(Number(notif.at) || Date.now());
-    const date = toISO(when);
-    const state = getState();
-    // 去重：同一天、同金额、同商户、5 分钟内只记一次
-    const dup = state.expenses.some(
-      (e) =>
-        e.src === 'auto' &&
-        e.date === date &&
-        Math.abs((Number(e.amount) || 0) - hit.amount) < 0.01 &&
-        (e.note || '') === (hit.merchant || '') &&
-        Math.abs((Number(e.createdAt) || 0) - when.getTime()) < 5 * 60 * 1000
-    );
-    if (dup) return false;
-
-    update((s) => {
-      s.expenses.push({
-        id: uid(),
-        date,
-        amount: hit.amount,
-        category: categorize(`${hit.merchant} ${hit.text}`),
-        note: hit.merchant || '自动记账',
-        src: 'auto',
-        createdAt: when.getTime(),
-      });
-    });
-    toast(`自动记了一笔 ¥${hit.amount.toFixed(2)}`);
-    return true;
+    return applyExpense(typeof raw === 'string' ? JSON.parse(raw) : raw);
   } catch (err) {
-    console.warn('[expense] 自动记账失败', err);
+    console.warn('[expense] 通知解析失败', err);
     return false;
   }
 };
+
+/**
+ * 拉取"App 没开着时"排队的通知，逐条补记，处理完按 key 从队列里删掉。
+ * 之所以用拉取而不是只靠推送：页面还没加载完时推送会丢。
+ */
+async function drainPendingExpenses() {
+  const plugins = window.Capacitor && window.Capacitor.Plugins;
+  const p = plugins && plugins.TimetableImport;
+  if (!p || typeof p.pendingExpenses !== 'function') return;
+  try {
+    const res = await p.pendingExpenses();
+    const items = (res && res.items) || [];
+    if (!items.length) return;
+    const keys = [];
+    let added = 0;
+    for (const it of items) {
+      if (applyExpense(it)) added += 1;
+      if (it && it.key) keys.push(it.key);
+    }
+    if (typeof p.clearExpenses === 'function') await p.clearExpenses({ keys });
+    if (added) toast(`补记了 ${added} 笔`);
+  } catch (err) {
+    console.warn('[expense] 拉取排队通知失败', err);
+  }
+}
+
+setTimeout(drainPendingExpenses, 900);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') drainPendingExpenses();
+});
 
 /* 首次打开：灌入课表 */seedIfEmpty(SEED_COURSES);
 

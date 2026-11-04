@@ -79,6 +79,38 @@ public class TimetablePlugin extends Plugin {
         }
     }
 
+    /** 页面主动拉取排队中的支付通知（页面还没准备好时推送会丢，所以用拉取兜底）。 */
+    @PluginMethod
+    public void pendingExpenses(PluginCall call) {
+        JSObject ret = new JSObject();
+        com.getcapacitor.JSArray arr = new com.getcapacitor.JSArray();
+        for (String item : ExpenseListener.pending(getContext())) {
+            try {
+                arr.put(new JSObject(item));
+            } catch (Exception ignored) {
+            }
+        }
+        ret.put("items", arr);
+        call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void clearExpenses(PluginCall call) {
+        java.util.HashSet<String> set = new java.util.HashSet<>();
+        com.getcapacitor.JSArray keys = call.getArray("keys");
+        if (keys != null) {
+            try {
+                for (int i = 0; i < keys.length(); i++) {
+                    String k = keys.getString(i);
+                    if (k != null) set.add(k);
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        ExpenseListener.clear(getContext(), set);
+        call.resolve();
+    }
+
     private boolean notificationsEnabled() {
         try {
             String flat = android.provider.Settings.Secure.getString(

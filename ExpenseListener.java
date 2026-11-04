@@ -14,13 +14,13 @@ import org.json.JSONObject;
 import java.lang.ref.WeakReference;
 
 /**
- * 通知监听：只做一件事——把微信/支付宝的通知原文转给 App 的 JS。
+ * 通知监听：把微信/支付宝的通知原文交给 App 的 JS 解析。
  *
- * 金额、商户、分类这些解析逻辑全在 JS 里（src/features/expense/auto.js），
- * 这样以后改规则只要换 index.html，不用重写 Java。
- *
- * App 不在前台时，通知先存进 SharedPreferences，等 App 回到前台再补记，
- * 所以「后台付款、晚点再打开 App」也不会丢。
+ * 可靠性设计（都是踩过的坑）：
+ * 1. 每条通知先落进 SharedPreferences 队列，再尝试实时推送 —— App 被杀也不丢；
+ * 2. 队列由 JS 主动拉取（pendingExpenses）并确认清空（clearExpenses），
+ *    避免"页面还没加载完就推送"导致丢事件；
+ * 3. 去重靠通知的 key，由 JS 完成（同一笔重复推送会命中同一个 key）。
  */
 public class ExpenseListener extends NotificationListenerService {
 
@@ -29,7 +29,7 @@ public class ExpenseListener extends NotificationListenerService {
 
     private static final String PREFS = "campus_pending";
     private static final String KEY = "queue";
-    private static final int MAX_QUEUE = 200;
+    private static final int MAX_QUEUE = 300;
 
     private static WeakReference<WebView> webViewRef = new WeakReference<>(null);
 
@@ -55,7 +55,13 @@ public class ExpenseListener extends NotificationListenerService {
             o.put("title", title);
             o.put("text", body);
             o.put("at", sbn.getPostTime());
-            deliver(o.toString());
+            o.put("key", sbn.getKey());
+            String json = o.toString();
+
+            // 先入队（保证不丢），再尝试实时推给页面
+            enqueue(getApplicationContext(), json);
+            WebView wv = webViewRef.get();
+            if (wv != null) eval(wv, json);
         } catch (Throwable ignored) {
             // 监听服务里任何异常都不能往外抛
         }
@@ -74,72 +80,77 @@ public class ExpenseListener extends NotificationListenerService {
 
     /* ---------------- 与页面之间的通道 ---------------- */
 
-    /** Activity 回到前台时挂上 WebView，并补发排队中的通知。 */
     public static void attach(WebView wv) {
         webViewRef = new WeakReference<>(wv);
-        if (wv == null) return;
-        Context ctx = wv.getContext();
-        for (String item : drain(ctx)) {
-            eval(wv, item);
-        }
     }
 
+    /** 页面进后台时不再推（队列照常收），回来再拉取。 */
     public static void detach() {
         webViewRef = new WeakReference<>(null);
     }
 
-    private static void deliver(String json) {
-        WebView wv = webViewRef.get();
-        if (wv == null) {
-            enqueue(wv == null ? null : wv.getContext(), json);
-            return;
-        }
-        eval(wv, json);
-    }
-
     private static void eval(WebView wv, String json) {
-        final String js = "window.__campusExpense && window.__campusExpense(" + JSONObject.quote(json) + ")";
-        wv.post(() -> wv.evaluateJavascript(js, null));
-    }
-
-    /* ---------------- 离线排队（SharedPreferences 里的 JSON 数组） ---------------- */
-
-    private static void enqueue(Context ctx, String json) {
-        if (ctx == null) {
-            // 没有 Context 时用应用级 Context
-            ctx = getAppContext();
-            if (ctx == null) return;
-        }
         try {
-            SharedPreferences sp = ctx.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-            JSONArray arr = new JSONArray(sp.getString(KEY, "[]"));
-            arr.put(json);
-            while (arr.length() > MAX_QUEUE) arr.remove(0);
-            sp.edit().putString(KEY, arr.toString()).apply();
+            final String js = "window.__campusExpense && window.__campusExpense(" + JSONObject.quote(json) + ")";
+            wv.post(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        wv.evaluateJavascript(js, null);
+                    } catch (Throwable ignored) {
+                    }
+                }
+            });
         } catch (Throwable ignored) {
         }
     }
 
-    private static String[] drain(Context ctx) {
+    /* ---------------- 队列（JS 主动拉取） ---------------- */
+
+    public static String[] pending(Context ctx) {
         try {
-            SharedPreferences sp = ctx.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+            SharedPreferences sp = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
             JSONArray arr = new JSONArray(sp.getString(KEY, "[]"));
             String[] out = new String[arr.length()];
             for (int i = 0; i < arr.length(); i++) out[i] = arr.getString(i);
-            sp.edit().putString(KEY, "[]").apply();
             return out;
         } catch (Throwable e) {
             return new String[0];
         }
     }
 
-    private static Context appCtx;
-
-    public static void init(Context ctx) {
-        if (ctx != null) appCtx = ctx.getApplicationContext();
+    public static void clear(Context ctx, java.util.Set<String> handledKeys) {
+        try {
+            SharedPreferences sp = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+            if (handledKeys == null || handledKeys.isEmpty()) {
+                sp.edit().putString(KEY, "[]").apply();
+                return;
+            }
+            JSONArray arr = new JSONArray(sp.getString(KEY, "[]"));
+            JSONArray keep = new JSONArray();
+            for (int i = 0; i < arr.length(); i++) {
+                String item = arr.getString(i);
+                String key = "";
+                try {
+                    key = new JSONObject(item).optString("key", "");
+                } catch (Throwable ignored) {
+                }
+                if (!handledKeys.contains(key)) keep.put(item);
+            }
+            sp.edit().putString(KEY, keep.toString()).apply();
+        } catch (Throwable ignored) {
+        }
     }
 
-    private static Context getAppContext() {
-        return appCtx;
+    private static void enqueue(Context ctx, String json) {
+        if (ctx == null) return;
+        try {
+            SharedPreferences sp = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+            JSONArray arr = new JSONArray(sp.getString(KEY, "[]"));
+            arr.put(json);
+            while (arr.length() > MAX_QUEUE) arr.remove(0);
+            sp.edit().putString(KEY, arr.toString()).apply();
+        } catch (Throwable ignored) {
+        }
     }
 }
