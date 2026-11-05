@@ -37,6 +37,8 @@ public final class CheckinStatus {
     private static volatile boolean running = false;
     private static volatile String lastResult = "";
     private static volatile String currentStage = "";
+    private static volatile long runStartedAt = 0;
+    private static volatile boolean runFinished = true;
 
     private static WeakReference<MainActivity> activityRef = new WeakReference<>(null);
     private static final Handler UI = new Handler(Looper.getMainLooper());
@@ -60,6 +62,26 @@ public final class CheckinStatus {
 
     public static boolean isRunning() {
         return running;
+    }
+
+    /* ---------------- 一轮执行的上下文（服务被重连后要靠它续跑） ---------------- */
+
+    public static void markRunStart() {
+        runStartedAt = System.currentTimeMillis();
+        runFinished = false;
+    }
+
+    public static void markRunEnd() {
+        runFinished = true;
+    }
+
+    /** 有一轮已经开始但还没结束：服务被解绑重连时需要续跑。 */
+    public static boolean isRunInFlight() {
+        return !runFinished;
+    }
+
+    public static long getRunStartedAt() {
+        return runStartedAt == 0 ? System.currentTimeMillis() : runStartedAt;
     }
 
     public static void setRunning(boolean v) {

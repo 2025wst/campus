@@ -53,7 +53,6 @@ public class CheckinService extends AccessibilityService {
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private boolean running = false;
-    private boolean tickScheduled = false;
     private boolean finished = true;
     private long startedAt = 0;
     private String lastAction = "";
@@ -83,6 +82,18 @@ public class CheckinService extends AccessibilityService {
         }
         Log.i(TAG, "无障碍服务已连接");
         CheckinStatus.setAccessibilityEnabled(true);
+
+        // 华为在应用退后台时会解绑本服务；重连后要把没跑完的那一轮接着跑完，
+        // 否则表现就是"卡在已等 N 秒"。
+        if (CheckinStatus.isRunInFlight()) {
+            running = true;
+            finished = false;
+            startedAt = CheckinStatus.getRunStartedAt();
+            stageReset();
+            handler.removeCallbacks(loop);
+            handler.post(loop);
+            CheckinStatus.appendLog("服务重连，继续未完成的打卡");
+        }
     }
 
     @Override
@@ -103,13 +114,9 @@ public class CheckinService extends AccessibilityService {
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
-        // 有界面变化时提前看一次；但用 tickScheduled 去重，
-        // 否则页面里一直有动画/时钟时事件不断，会把 tick 无限往后推（饿死）。
-        if (running && !tickScheduled) {
-            tickScheduled = true;
-            handler.removeCallbacks(tickRunnable);
-            handler.postDelayed(tickRunnable, 250);
-        }
+        // 不需要事件驱动：主循环自己按固定节奏跑。
+        // 之前用"事件来了就重置定时"的写法，一旦页面持续有动画就会把 tick 无限推迟；
+        // 更糟的是华为在应用退后台时会解绑服务，重连后定时器全丢。
     }
 
     @Override
@@ -135,15 +142,15 @@ public class CheckinService extends AccessibilityService {
         }
         svc.running = true;
         svc.finished = false;
-        svc.tickScheduled = true;
         svc.startedAt = System.currentTimeMillis();
         svc.stageReset();
         svc.result = "";
+        CheckinStatus.markRunStart();
         CheckinStatus.setRunning(true);
         CheckinStatus.setLastResult("开始执行…");
         CheckinStatus.appendLog("开始执行查寝打卡");
-        svc.handler.removeCallbacks(svc.tickRunnable);
-        svc.handler.postDelayed(svc.tickRunnable, 500);
+        svc.handler.removeCallbacks(svc.loop);
+        svc.handler.postDelayed(svc.loop, 500);
         return true;
     }
 
@@ -167,15 +174,31 @@ public class CheckinService extends AccessibilityService {
 
     // ------------------------------------------------------------------ 状态机
 
-    private final Runnable tickRunnable = new Runnable() {
+    /**
+     * 自循环：不依赖无障碍事件，也不依赖外部调度。
+     * 每轮 tick 结束自己排下一轮，只要 running 还在。
+     * （旧写法用"事件驱动 + removeCallbacks"，华为解绑重连时定时器会一起丢，
+     *   表现为界面永远停在"已等 N 秒"。）
+     */
+    private final Runnable loop = new Runnable() {
         @Override
         public void run() {
-            tick();
+            if (!running) {
+                return;
+            }
+            try {
+                tick();
+            } catch (Throwable t) {
+                Log.w(TAG, "tick 异常", t);
+            }
+            if (running) {
+                handler.removeCallbacks(this);
+                handler.postDelayed(this, TICK_MS);
+            }
         }
     };
 
     private void tick() {
-        tickScheduled = false;
         if (!running) {
             return;
         }
@@ -258,13 +281,8 @@ public class CheckinService extends AccessibilityService {
         schedule();
     }
 
+    /** 旧调用点保留：循环由 loop 自己驱动，这里不需要做事。 */
     private void schedule() {
-        if (!running) {
-            return;
-        }
-        tickScheduled = true;
-        handler.removeCallbacks(tickRunnable);
-        handler.postDelayed(tickRunnable, TICK_MS);
     }
 
     private void finish(String message, boolean success) {
@@ -273,10 +291,10 @@ public class CheckinService extends AccessibilityService {
         }
         finished = true;
         running = false;
-        tickScheduled = false;
-        handler.removeCallbacks(tickRunnable);
+        handler.removeCallbacks(loop);
         result = message;
         CheckinStatus.setRunning(false);
+        CheckinStatus.markRunEnd();
         CheckinStatus.setLastResult(message);
         CheckinStatus.appendLog(message);
         CheckinStatus.recordResult(success, message);
