@@ -74,6 +74,18 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        // Activity 已经在后台时，闹钟的启动请求会走这里（singleTop），
+        // 之前没处理导致"闹钟响了却什么都不做"。
+        if (intent != null && intent.getBooleanExtra(EXTRA_AUTO, false)) {
+            intent.removeExtra(EXTRA_AUTO);
+            ui.postDelayed(this::startAutoFlow, 600);
+        }
+    }
+
+    @Override
     protected void onResume() {
         super.onResume();
         CheckinStatus.bindActivity(this);

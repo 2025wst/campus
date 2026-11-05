@@ -81,6 +81,8 @@ public class CheckinService extends AccessibilityService {
     private int tapIndex = 0;
     private long lastTapAt = 0;
     private boolean refreshed = false;
+    private int bringStep = 0;
+    private long lastBringAt = 0;
     private String result = "";
 
     // ------------------------------------------------------------------ 生命周期
@@ -186,6 +188,8 @@ public class CheckinService extends AccessibilityService {
         tapIndex = 0;
         lastTapAt = 0;
         refreshed = false;
+        bringStep = 0;
+        lastBringAt = 0;
     }
 
     // ------------------------------------------------------------------ 状态机
@@ -251,11 +255,7 @@ public class CheckinService extends AccessibilityService {
             recycle(probe);
         }
         if (!PKG_CHAOXING.contentEquals(pkgName)) {
-            CheckinStatus.setLastResult("等待学习通到前台…（当前 " + pkgName + "）");
-            if (tickCount % 15 == 0) {
-                CheckinStatus.appendLog("第 " + tickCount + " 次检查：前台是 " + pkgName
-                        + "，已等 " + (elapsed / 1000) + " 秒");
-            }
+            bringChaoxingToFront(root, elapsed, pkgName);
             return;
         }
 
@@ -582,6 +582,99 @@ public class CheckinService extends AccessibilityService {
             }
         }
         return null;
+    }
+
+    /**
+     * 学习通不在前台时，主动把它切回来。
+     *
+     * 只能用"界面操作"（回桌面点图标 / 最近任务点卡片），
+     * 不能用 startActivity —— 后者会被安卓/华为的"后台禁止拉起界面"拦掉。
+     * 但点图标、点最近任务卡片都算用户级操作，系统放行。
+     */
+    private void bringChaoxingToFront(AccessibilityNodeInfo root, long elapsed, String pkgName) {
+        long now = System.currentTimeMillis();
+        if (now - lastBringAt < 5000) {
+            setWaitStatus(pkgName, elapsed);
+            return;
+        }
+        lastBringAt = now;
+        bringStep++;
+        switch (bringStep) {
+            case 1:
+                performGlobalAction(GLOBAL_ACTION_HOME);
+                CheckinStatus.appendLog("学习通不在前台（当前 " + pkgName + "），先回桌面");
+                CheckinStatus.setLastResult("正在切回学习通…");
+                break;
+            case 2:
+            case 3:
+            case 4: {
+                boolean ok = clickTextOrDesc(root, "学习通");
+                CheckinStatus.appendLog("在桌面找「学习通」图标并点击：" + (ok ? "成功" : "没找到") + "（第 " + (bringStep - 1) + " 次）");
+                CheckinStatus.setLastResult(ok ? "已点学习通，等待启动…" : "桌面没找到学习通图标，换最近任务");
+                break;
+            }
+            case 5:
+                performGlobalAction(GLOBAL_ACTION_RECENTS);
+                CheckinStatus.appendLog("改用最近任务切换");
+                break;
+            case 6:
+            case 7:
+            case 8: {
+                boolean ok = clickTextOrDesc(root, "学习通");
+                CheckinStatus.appendLog("在最近任务里点学习通：" + (ok ? "成功" : "没找到"));
+                break;
+            }
+            default:
+                setWaitStatus(pkgName, elapsed);
+                break;
+        }
+    }
+
+    private void setWaitStatus(String pkgName, long elapsed) {
+        CheckinStatus.setLastResult("等待学习通到前台…（当前 " + pkgName + "）");
+        if (tickCount % 15 == 0) {
+            CheckinStatus.appendLog("第 " + tickCount + " 次检查：前台是 " + pkgName
+                    + "，已等 " + (elapsed / 1000) + " 秒");
+        }
+    }
+
+    /** 按文字或无障碍描述找元素并点击（桌面图标的名字在 content-desc 里）。 */
+    private boolean clickTextOrDesc(AccessibilityNodeInfo node, String needle) {
+        return clickSearch(node, needle, 0);
+    }
+
+    private boolean clickSearch(AccessibilityNodeInfo node, String needle, int depth) {
+        if (node == null || depth > 25) {
+            return false;
+        }
+        try {
+            CharSequence t = node.getText();
+            CharSequence d = node.getContentDescription();
+            boolean hit = (t != null && t.toString().contains(needle))
+                    || (d != null && d.toString().contains(needle));
+            if (hit) {
+                if (node.isClickable() && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                    return true;
+                }
+                AccessibilityNodeInfo p = node.getParent();
+                int up = 0;
+                while (p != null && up < 4) {
+                    if (p.isClickable() && p.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                        return true;
+                    }
+                    p = p.getParent();
+                    up++;
+                }
+            }
+            for (int i = 0; i < node.getChildCount(); i++) {
+                AccessibilityNodeInfo c = node.getChild(i);
+                if (clickSearch(c, needle, depth + 1)) {
+                    return true;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
     }
 
     private boolean containsText(List<String> texts, String needle) {
