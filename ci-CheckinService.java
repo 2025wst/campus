@@ -59,6 +59,10 @@ public class CheckinService extends AccessibilityService {
     /** 多个候选坐标之间的间隔 */
     private static final long TAP_GAP_MS = 2500;
 
+    /** 打卡页左上角「返回」箭头的相对坐标（用于强制刷新页面） */
+    private static final float BACK_X = 0.02f;
+    private static final float BACK_Y = 0.065f;
+
     private static CheckinService instance;
 
     private Thread worker;
@@ -76,6 +80,7 @@ public class CheckinService extends AccessibilityService {
     private int backTries = 0;
     private int tapIndex = 0;
     private long lastTapAt = 0;
+    private boolean refreshed = false;
     private String result = "";
 
     // ------------------------------------------------------------------ 生命周期
@@ -180,6 +185,7 @@ public class CheckinService extends AccessibilityService {
         tickCount = 0;
         tapIndex = 0;
         lastTapAt = 0;
+        refreshed = false;
     }
 
     // ------------------------------------------------------------------ 状态机
@@ -263,6 +269,18 @@ public class CheckinService extends AccessibilityService {
 
         try {
             List<String> texts = collectTexts(root, 0);
+
+            // 0) 如果已经停在打卡页：先按返回退回首页，下一次再点进去，
+            //    强制页面重新加载（打卡页不会自己刷新状态，21:00 之后还显示"未到时间"）。
+            //    整个流程都发生在学习通内部，不需要启动任何界面，
+            //    从而绕开华为"后台禁止拉起界面"的限制。
+            if (!refreshed && containsText(texts, "查寝定位打卡")) {
+                refreshed = true;
+                boolean okBack = tapAt(BACK_X, BACK_Y);
+                CheckinStatus.appendLog("已在打卡页，先返回以便重新加载（" + (okBack ? "已注入" : "注入失败") + "）");
+                CheckinStatus.setLastResult("正在重新加载打卡页…");
+                return;
+            }
 
             // 1) 已经签上了
             String done = firstMatch(texts, DONE_TEXTS, false);
@@ -566,6 +584,14 @@ public class CheckinService extends AccessibilityService {
         return null;
     }
 
+    private boolean containsText(List<String> texts, String needle) {
+        for (String s : texts) {
+            if (s != null && s.contains(needle)) {
+                return true;
+            }
+        }
+        return false;
+    }
     /** 命中结果：既要有能点的节点，也要有"我们认出来的文字"。 */
     private static final class Hit {
         final AccessibilityNodeInfo node;
