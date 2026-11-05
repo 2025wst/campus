@@ -59,6 +59,7 @@ public class CheckinService extends AccessibilityService {
     private String lastClickedText = "";
     private long lastClickAt = 0;
     private int clickCount = 0;
+    private int tickCount = 0;
     private final java.util.Map<String, Integer> clickCounts = new java.util.HashMap<>();
     private long lastBackAt = 0;
     private int backTries = 0;
@@ -170,6 +171,7 @@ public class CheckinService extends AccessibilityService {
         clickCounts.clear();
         lastBackAt = 0;
         backTries = 0;
+        tickCount = 0;
     }
 
     // ------------------------------------------------------------------ 状态机
@@ -202,21 +204,36 @@ public class CheckinService extends AccessibilityService {
         if (!running) {
             return;
         }
-        if (System.currentTimeMillis() - startedAt > DEADLINE_MS) {
+        tickCount++;
+        long waited = System.currentTimeMillis() - startedAt;
+        if (waited > DEADLINE_MS) {
             finish("超时：4 分钟没等到结果", false);
             return;
         }
 
-        // 只在学习通里动作
-        if (!isChaoxingForeground()) {
-            CheckinStatus.setLastResult("等待学习通到前台…");
-            schedule();
+        // 只在学习通里动作。顺手把"当前前台是谁"记下来，
+        // 否则出问题时日志是空的，根本不知道卡在哪一步。
+        AccessibilityNodeInfo probe = getRootInActiveWindow();
+        String pkgName = null;
+        if (probe != null) {
+            CharSequence p = probe.getPackageName();
+            pkgName = p == null ? null : p.toString();
+            recycle(probe);
+        }
+        if (!PKG_CHAOXING.contentEquals(pkgName)) {
+            CheckinStatus.setLastResult("等待学习通到前台…（当前 " + pkgName + "）");
+            if (tickCount % 15 == 0) {
+                CheckinStatus.appendLog("第 " + tickCount + " 次检查：前台是 " + pkgName
+                        + "，已等 " + (waited / 1000) + " 秒");
+            }
             return;
         }
 
         AccessibilityNodeInfo root = getRootInActiveWindow();
         if (root == null) {
-            schedule();
+            if (tickCount % 15 == 0) {
+                CheckinStatus.appendLog("第 " + tickCount + " 次检查：拿不到界面内容");
+            }
             return;
         }
 
@@ -271,8 +288,21 @@ public class CheckinService extends AccessibilityService {
                 return;
             }
 
-            CheckinStatus.setLastResult("页面加载中…（已等 "
-                    + ((System.currentTimeMillis() - startedAt) / 1000) + " 秒）");
+            CheckinStatus.setLastResult("页面加载中…（已等 " + (waited / 1000) + " 秒）");
+            // 每 15 次（约 12 秒）记一次现场：看到多少条文字、有没有「定位」相关的
+            if (tickCount % 15 == 0) {
+                StringBuilder sb = new StringBuilder();
+                for (String t : texts) {
+                    if (t.contains("打卡") || t.contains("签到") || t.contains("定位")) {
+                        sb.append("[").append(t).append("]");
+                        if (sb.length() > 120) {
+                            break;
+                        }
+                    }
+                }
+                CheckinStatus.appendLog("第 " + tickCount + " 次：共 " + texts.size()
+                        + " 条文字，相关=" + (sb.length() == 0 ? "无" : sb.toString()));
+            }
         } catch (Throwable t) {
             Log.w(TAG, "tick 出错", t);
         } finally {

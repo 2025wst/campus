@@ -94,7 +94,19 @@ public final class CheckinStatus {
     }
 
     public static void setLastResult(String s) {
-        lastResult = s == null ? "" : s;
+        String v = s == null ? "" : s;
+        if (v.equals(lastResult)) {
+            return;
+        }
+        lastResult = v;
+        // 落盘一份：排障时可以直接从文件读，不用把 App 切到前台（切前台会改变被检测的目标）
+        Context ctx = App.get();
+        if (ctx != null) {
+            try {
+                ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE).edit().putString("cur", v).apply();
+            } catch (Throwable ignored) {
+            }
+        }
         notifyUi();
     }
 
