@@ -1,5 +1,8 @@
 name: build-checkin-apk
 
+permissions:
+  contents: write
+
 on:
   workflow_dispatch:
   push:
@@ -81,3 +84,11 @@ jobs:
           name: checkin-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
+      - name: 发布到 Release（免登录下载）
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: checkin-latest
+          name: 查寝打卡 · 最新构建
+          body: 由 GitHub Actions 自动构建
+          files: android/app/build/outputs/apk/debug/app-debug.apk
