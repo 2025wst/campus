@@ -1,14 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   无障碍服务的配置文件：
-  - accessibilityEventTypes = typeAllMask：所有界面变化都通知我们（这样能第一时间看到页面加载完）
-  - canRetrieveWindowContent：必须为 true，否则读不到页面上的文字
-  - flagReportViewIds / flagRetrieveInteractiveWindows：拿到控件 id 和多窗口内容
+  - accessibilityEventTypes = typeAllMask：所有界面变化都通知我们
+  - canRetrieveWindowContent：必须 true，否则读不到页面上的文字
+  - canPerformGestures：必须 true，否则 dispatchGesture() 无法注入触摸
+    （学习通的打卡页把 WebView 无障碍关了，只能靠坐标盲点，所以这个能力是命脉）
+  - flagReportViewIds / flagRetrieveInteractiveWindows / flagIncludeNotImportantViews：拿到控件 id 和多窗口内容
 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeAllMask"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagDefault|flagReportViewIds|flagRetrieveInteractiveWindows|flagIncludeNotImportantViews"
+    android:canPerformGestures="true"
     android:canRetrieveWindowContent="true"
     android:description="@string/accessibility_desc"
     android:notificationTimeout="200"

@@ -36,6 +36,15 @@ public final class Notify {
     }
 
     public static void show(Context ctx, boolean success, String message) {
+        show(ctx, success ? "查寝打卡成功 ✅" : "查寝打卡失败 ❌", message);
+    }
+
+    /** 已执行但结果未知（坐标盲点）用这个，避免误报"失败"。 */
+    public static void showInfo(Context ctx, String message) {
+        show(ctx, "查寝打卡：已执行，请确认", message);
+    }
+
+    public static void show(Context ctx, String title, String message) {
         try {
             ensureChannel(ctx);
             NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
@@ -57,7 +66,7 @@ public final class Notify {
                 b = new Notification.Builder(ctx);
             }
             b.setSmallIcon(android.R.drawable.stat_notify_sync)
-                    .setContentTitle(success ? "查寝打卡成功 ✅" : "查寝打卡失败 ❌")
+                    .setContentTitle(title)
                     .setContentText(message == null ? "" : message)
                     .setStyle(new Notification.BigTextStyle().bigText(message == null ? "" : message))
                     .setAutoCancel(true)

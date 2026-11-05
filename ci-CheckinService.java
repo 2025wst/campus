@@ -2,8 +2,12 @@ package com.zzu.checkin;
 
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.AccessibilityServiceInfo;
+import android.accessibilityservice.GestureDescription;
 import android.content.Context;
 import android.content.Intent;
+import android.graphics.Path;
+import android.os.Build;
+import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
@@ -68,6 +72,8 @@ public class CheckinService extends AccessibilityService {
     private final java.util.Map<String, Integer> clickCounts = new java.util.HashMap<>();
     private long lastBackAt = 0;
     private int backTries = 0;
+    private boolean tapped = false;
+    private long tappedAt = 0;
     private String result = "";
 
     // ------------------------------------------------------------------ 生命周期
@@ -170,6 +176,8 @@ public class CheckinService extends AccessibilityService {
         lastBackAt = 0;
         backTries = 0;
         tickCount = 0;
+        tapped = false;
+        tappedAt = 0;
     }
 
     // ------------------------------------------------------------------ 状态机
@@ -301,6 +309,26 @@ public class CheckinService extends AccessibilityService {
                 return;
             }
 
+            // 4) 页面在、但内容读不到（学习通关掉了 WebView 无障碍）→ 坐标盲点
+            if (!tapped && elapsed > 12000) {
+                tapped = true;
+                tappedAt = System.currentTimeMillis();
+                float[] pt = readTapPoint();
+                boolean okTap = tapAt(pt[0], pt[1]);
+                CheckinStatus.appendLog("页面内容读不到，按坐标盲点 (" + pt[0] + "," + pt[1] + ") "
+                        + (okTap ? "已注入" : "注入失败"));
+                CheckinStatus.setLastResult("已按坐标点击，等待确认…");
+                return;
+            }
+
+            // 5) 点过一次后等 8 秒；再点一次兜底（重复点打卡不会出问题），然后收尾
+            if (tapped && System.currentTimeMillis() - tappedAt > 8000) {
+                float[] pt2 = readTapPoint();
+                tapAt(pt2[0], pt2[1]);
+                finishInfo("已按坐标点击两次，请在 App 里看结果");
+                return;
+            }
+
             // 兜底：45 秒还没看到任何入口，按两次返回，回到首页再找
             long waited = System.currentTimeMillis() - startedAt;
             if (waited > 45000 && backTries < 2 && System.currentTimeMillis() - lastBackAt > 10000) {
@@ -333,6 +361,72 @@ public class CheckinService extends AccessibilityService {
             recycle(root);
         }
         schedule();
+    }
+
+    /**
+     * 读 files/tap.txt（内容形如 "0.5,0.79"，表示屏幕宽高的比例）。
+     * 用文件而不是硬编码：坐标调起来不用重新打包，adb 一条命令就能改。
+     */
+    private float[] readTapPoint() {
+        float rx = 0.5f;
+        float ry = 0.79f;
+        try {
+            java.io.File f = new java.io.File(getFilesDir(), "tap.txt");
+            if (f.exists()) {
+                java.io.BufferedReader r = new java.io.BufferedReader(new java.io.FileReader(f));
+                String s = r.readLine();
+                r.close();
+                if (s != null && s.contains(",")) {
+                    String[] xy = s.trim().split(",");
+                    rx = Float.parseFloat(xy[0].trim());
+                    ry = Float.parseFloat(xy[1].trim());
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return new float[] { rx, ry };
+    }
+
+    /** 在屏幕相对位置注入一次点击（比例 0~1 之间）。 */
+    private boolean tapAt(float rx, float ry) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+            return false;
+        }
+        try {
+            DisplayMetrics dm = getResources().getDisplayMetrics();
+            float x = Math.max(1, Math.min(dm.widthPixels - 1, dm.widthPixels * rx));
+            float y = Math.max(1, Math.min(dm.heightPixels - 1, dm.heightPixels * ry));
+            Path p = new Path();
+            p.moveTo(x, y);
+            GestureDescription.StrokeDescription stroke =
+                    new GestureDescription.StrokeDescription(p, 0, 60);
+            GestureDescription gd = new GestureDescription.Builder().addStroke(stroke).build();
+            boolean ok = dispatchGesture(gd, null, null);
+            Log.i(TAG, "tapAt " + x + "," + y + " -> " + ok);
+            return ok;
+        } catch (Throwable t) {
+            CheckinStatus.appendLog("注入点击失败：" + t.getClass().getSimpleName());
+            return false;
+        }
+    }
+
+    /** 收尾但不算失败：坐标点击已执行，结果需要人确认。 */
+    private void finishInfo(String message) {
+        if (finished) {
+            return;
+        }
+        finished = true;
+        running = false;
+        CheckinStatus.setRunning(false);
+        CheckinStatus.markRunEnd();
+        CheckinStatus.setLastResult(message);
+        CheckinStatus.appendLog(message);
+        CheckinStatus.recordResult(true, message);
+        try {
+            Notify.showInfo(getApplicationContext(), message);
+        } catch (Throwable ignored) {
+        }
+        CheckinStatus.closeActivitySoon();
     }
 
     /** 旧调用点保留：循环由 loop 自己驱动，这里不需要做事。 */
