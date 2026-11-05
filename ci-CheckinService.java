@@ -256,32 +256,32 @@ public class CheckinService extends AccessibilityService {
             }
 
             // 2) 打卡页：点按钮
-            AccessibilityNodeInfo btn = findExact(root, BUTTON_TEXTS);
+            Hit btn = findExact(root, BUTTON_TEXTS);
             if (btn != null) {
-                String label = safeText(btn);
-                if (canClick(label)) {
-                    boolean ok = clickNode(btn);
-                    CheckinStatus.appendLog("点「" + label + "」 " + (ok ? "成功" : "失败"));
-                    markClicked(label);
-                    CheckinStatus.setLastResult(ok ? "已点击「" + label + "」，等待结果…" : "点击失败，重试中…");
+                if (canClick(btn.label)) {
+                    boolean ok = clickNode(btn.node);
+                    CheckinStatus.appendLog("点「" + btn.label + "」 " + (ok ? "成功" : "失败"));
+                    markClicked(btn.label);
+                    CheckinStatus.setLastResult(ok ? "已点击「" + btn.label + "」，等待结果…" : "点击失败，重试中…");
+                } else if (tickCount % 30 == 0) {
+                    CheckinStatus.appendLog("看到「" + btn.label + "」但暂不点（冷却中/次数上限）");
                 }
-                recycle(btn);
-                schedule();
+                recycle(btn.node);
                 return;
             }
 
             // 3) 首页：点「定位打卡」
-            AccessibilityNodeInfo entry = findExact(root, ENTRY_TEXTS);
+            Hit entry = findExact(root, ENTRY_TEXTS);
             if (entry != null) {
-                String label = safeText(entry);
-                if (canClick(label)) {
-                    boolean ok = clickNode(entry);
-                    CheckinStatus.appendLog("点「" + label + "」 " + (ok ? "成功" : "失败"));
-                    markClicked(label);
+                if (canClick(entry.label)) {
+                    boolean ok = clickNode(entry.node);
+                    CheckinStatus.appendLog("点「" + entry.label + "」 " + (ok ? "成功" : "失败"));
+                    markClicked(entry.label);
                     CheckinStatus.setLastResult(ok ? "已打开打卡页，等待加载…" : "打开失败，重试中…");
+                } else if (tickCount % 30 == 0) {
+                    CheckinStatus.appendLog("看到「" + entry.label + "」但暂不点（冷却中/次数上限）");
                 }
-                recycle(entry);
-                schedule();
+                recycle(entry.node);
                 return;
             }
 
@@ -409,8 +409,25 @@ public class CheckinService extends AccessibilityService {
         return null;
     }
 
-    /** 按"文字完全相等"找节点，并向上找可点击的祖先。 */
-    private AccessibilityNodeInfo findExact(AccessibilityNodeInfo root, String[] candidates) {
+    /** 命中结果：既要有能点的节点，也要有"我们认出来的文字"。 */
+    private static final class Hit {
+        final AccessibilityNodeInfo node;
+        final String label;
+
+        Hit(AccessibilityNodeInfo node, String label) {
+            this.node = node;
+            this.label = label;
+        }
+    }
+
+    /**
+     * 按"文字完全相等"找节点，并向上找可点击的祖先。
+     *
+     * 关键：label 用的是**匹配到的候选文字**，不是祖先节点的文字。
+     * 祖先通常是容器（RelativeLayout 之类），没有 text，
+     * 早先版本用祖先的 text 当标签会得到空串，导致永远判定"不能点"而静默跳过。
+     */
+    private Hit findExact(AccessibilityNodeInfo root, String[] candidates) {
         for (String c : candidates) {
             List<AccessibilityNodeInfo> nodes;
             try {
@@ -431,7 +448,7 @@ public class CheckinService extends AccessibilityService {
                     AccessibilityNodeInfo clickable = clickableAncestor(n);
                     recycle(n);
                     if (clickable != null) {
-                        return clickable;
+                        return new Hit(clickable, c);
                     }
                 } else {
                     recycle(n);
