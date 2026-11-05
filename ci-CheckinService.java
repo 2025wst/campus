@@ -205,8 +205,8 @@ public class CheckinService extends AccessibilityService {
             return;
         }
         tickCount++;
-        long waited = System.currentTimeMillis() - startedAt;
-        if (waited > DEADLINE_MS) {
+        long elapsed = System.currentTimeMillis() - startedAt;
+        if (elapsed > DEADLINE_MS) {
             finish("超时：4 分钟没等到结果", false);
             return;
         }
@@ -224,7 +224,7 @@ public class CheckinService extends AccessibilityService {
             CheckinStatus.setLastResult("等待学习通到前台…（当前 " + pkgName + "）");
             if (tickCount % 15 == 0) {
                 CheckinStatus.appendLog("第 " + tickCount + " 次检查：前台是 " + pkgName
-                        + "，已等 " + (waited / 1000) + " 秒");
+                        + "，已等 " + (elapsed / 1000) + " 秒");
             }
             return;
         }
