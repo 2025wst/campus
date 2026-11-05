@@ -70,16 +70,10 @@ public class CheckinService extends AccessibilityService {
     protected void onServiceConnected() {
         super.onServiceConnected();
         instance = this;
-        AccessibilityServiceInfo info = getServiceInfo();
-        if (info != null) {
-            info.eventTypes = AccessibilityEvent.TYPES_ALL_MASK;
-            info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC;
-            info.flags |= AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
-                    | AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
-                    | AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS;
-            info.notificationTimeout = 200;
-            setServiceInfo(info);
-        }
+        // 故意不调用 setServiceInfo()：
+        // 在 onServiceConnected 里改服务配置会让框架重连自己，
+        // 连接一直处于"握手未完成"，随后 getRootInActiveWindow() 会永久阻塞。
+        // 所有配置都写在 res/xml/accessibility_service_config.xml 里，够用了。
         Log.i(TAG, "无障碍服务已连接");
         CheckinStatus.appendLog("无障碍服务已连接");
         CheckinStatus.setAccessibilityEnabled(true);
@@ -187,7 +181,15 @@ public class CheckinService extends AccessibilityService {
         final int runId = ++workerGeneration;
         worker = new Thread(() -> {
             CheckinStatus.appendLog("工作线程启动 #" + runId);
+            long lastBeat = 0;
             while (running && workerGeneration == runId) {
+                // 心跳：每 20 秒记一次 tickCount。
+                // 如果心跳在涨、tickCount 不涨，说明卡在 tick() 内部的系统调用上。
+                long now = System.currentTimeMillis();
+                if (now - lastBeat > 20000) {
+                    lastBeat = now;
+                    CheckinStatus.appendLog("心跳 #" + runId + "：tickCount=" + tickCount);
+                }
                 try {
                     tick();
                 } catch (Throwable t) {
