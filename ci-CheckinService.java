@@ -4,8 +4,6 @@ import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.AccessibilityServiceInfo;
 import android.content.Context;
 import android.content.Intent;
-import android.os.Handler;
-import android.os.Looper;
 import android.util.Log;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
@@ -51,8 +49,9 @@ public class CheckinService extends AccessibilityService {
 
     private static CheckinService instance;
 
-    private final Handler handler = new Handler(Looper.getMainLooper());
-    private boolean running = false;
+    private Thread worker;
+    private volatile int workerGeneration = 0;
+    private volatile boolean running = false;
     private boolean finished = true;
     private long startedAt = 0;
     private String lastAction = "";
@@ -82,6 +81,7 @@ public class CheckinService extends AccessibilityService {
             setServiceInfo(info);
         }
         Log.i(TAG, "无障碍服务已连接");
+        CheckinStatus.appendLog("无障碍服务已连接");
         CheckinStatus.setAccessibilityEnabled(true);
 
         // 华为在应用退后台时会解绑本服务；重连后要把没跑完的那一轮接着跑完，
@@ -91,26 +91,25 @@ public class CheckinService extends AccessibilityService {
             finished = false;
             startedAt = CheckinStatus.getRunStartedAt();
             stageReset();
-            handler.removeCallbacks(loop);
-            handler.post(loop);
+            startWorker();
             CheckinStatus.appendLog("服务重连，继续未完成的打卡");
         }
     }
 
     @Override
     public boolean onUnbind(Intent intent) {
+        CheckinStatus.appendLog("无障碍服务被解绑");
         instance = null;
         CheckinStatus.setAccessibilityEnabled(false);
-        handler.removeCallbacksAndMessages(null);
-        return super.onUnbind(intent);
+       return super.onUnbind(intent);
     }
 
     @Override
     public void onDestroy() {
+        CheckinStatus.appendLog("无障碍服务销毁");
         instance = null;
         CheckinStatus.setAccessibilityEnabled(false);
-        handler.removeCallbacksAndMessages(null);
-        super.onDestroy();
+       super.onDestroy();
     }
 
     @Override
@@ -150,8 +149,7 @@ public class CheckinService extends AccessibilityService {
         CheckinStatus.setRunning(true);
         CheckinStatus.setLastResult("开始执行…");
         CheckinStatus.appendLog("开始执行查寝打卡");
-        svc.handler.removeCallbacks(svc.loop);
-        svc.handler.postDelayed(svc.loop, 500);
+        svc.startWorker();
         return true;
     }
 
@@ -177,28 +175,36 @@ public class CheckinService extends AccessibilityService {
     // ------------------------------------------------------------------ 状态机
 
     /**
-     * 自循环：不依赖无障碍事件，也不依赖外部调度。
-     * 每轮 tick 结束自己排下一轮，只要 running 还在。
-     * （旧写法用"事件驱动 + removeCallbacks"，华为解绑重连时定时器会一起丢，
-     *   表现为界面永远停在"已等 N 秒"。）
+     * 独立工作线程：不用 Handler/Looper。
+     * Handler 方案在华为上不可靠（服务被解绑重建时 post 的回调会丢），
+     * 线程只依赖一个 volatile 布尔量，简单可预测。
      */
-    private final Runnable loop = new Runnable() {
-        @Override
-        public void run() {
-            if (!running) {
-                return;
-            }
-            try {
-                tick();
-            } catch (Throwable t) {
-                Log.w(TAG, "tick 异常", t);
-            }
-            if (running) {
-                handler.removeCallbacks(this);
-                handler.postDelayed(this, TICK_MS);
-            }
+    private void startWorker() {
+        if (worker != null && worker.isAlive()) {
+            CheckinStatus.appendLog("工作线程已在运行，不重复启动");
+            return;
         }
-    };
+        final int runId = ++workerGeneration;
+        worker = new Thread(() -> {
+            CheckinStatus.appendLog("工作线程启动 #" + runId);
+            while (running && workerGeneration == runId) {
+                try {
+                    tick();
+                } catch (Throwable t) {
+                    Log.w(TAG, "tick 异常", t);
+                    CheckinStatus.appendLog("tick 异常：" + t.getClass().getSimpleName());
+                }
+                try {
+                    Thread.sleep(TICK_MS);
+                } catch (InterruptedException e) {
+                    break;
+                }
+            }
+            CheckinStatus.appendLog("工作线程退出 #" + runId);
+        }, "checkin-worker-" + runId);
+        worker.setDaemon(true);
+        worker.start();
+    }
 
     private void tick() {
         if (!running) {
@@ -321,8 +327,7 @@ public class CheckinService extends AccessibilityService {
         }
         finished = true;
         running = false;
-        handler.removeCallbacks(loop);
-        result = message;
+       result = message;
         CheckinStatus.setRunning(false);
         CheckinStatus.markRunEnd();
         CheckinStatus.setLastResult(message);
