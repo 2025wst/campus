@@ -37,8 +37,14 @@ public class CheckinService extends AccessibilityService {
     /** 首页入口的文字（完全相等匹配） */
     private static final String[] ENTRY_TEXTS = { "定位打卡" };
 
-    /** 打卡按钮可能的文字（完全相等匹配）。今天已签到时页面没有按钮，所以只会匹配到按钮本身。 */
-    private static final String[] BUTTON_TEXTS = { "打卡", "立即打卡", "签到", "立即签到", "确认打卡", "确定打卡" };
+    /** 打卡按钮可能的文字（完全相等匹配） */
+    private static final String[] BUTTON_TEXTS = {
+            "打卡", "立即打卡", "签到", "立即签到", "确认打卡", "确定打卡",
+            "点击打卡", "我要打卡", "去打卡", "开始打卡", "现在打卡"
+    };
+
+    /** 出现这些文字说明当前不在打卡时间，没必要死等 */
+    private static final String[] OUT_OF_WINDOW_TEXTS = { "未到查寝时间", "不在打卡时间", "未到打卡时间", "打卡时间已结束" };
 
     /** 出现这些文字就算已经签上了 */
     private static final String[] DONE_TEXTS = { "已完成", "已签到", "签到成功", "打卡成功" };
@@ -255,8 +261,18 @@ public class CheckinService extends AccessibilityService {
                 return;
             }
 
-            // 2) 打卡页：点按钮
+            // 1b) 还没到打卡时间：直接结束，别白等 4 分钟
+            String early = firstMatch(texts, OUT_OF_WINDOW_TEXTS, false);
+            if (early != null) {
+                finish("当前不在打卡时间（页面提示「" + early + "」）", false);
+                return;
+            }
+
+            // 2) 打卡页：点按钮（先精确匹配，再放宽：任何"含打卡、但不含查寝"的短文字）
             Hit btn = findExact(root, BUTTON_TEXTS);
+            if (btn == null) {
+                btn = findLooseButton(root);
+            }
             if (btn != null) {
                 if (canClick(btn.label)) {
                     boolean ok = clickNode(btn.node);
@@ -404,6 +420,41 @@ public class CheckinService extends AccessibilityService {
                 if (hit) {
                     return c;
                 }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 放宽版按钮查找：任何"包含打卡、但不含查寝、长度不超过 6"的文字。
+     * 用来兜住「立即打卡 / 签到打卡 / 去打卡」这类没枚举到的文案，
+     * 同时避免把标题「查寝定位打卡」当成按钮。
+     */
+    private Hit findLooseButton(AccessibilityNodeInfo root) {
+        List<AccessibilityNodeInfo> nodes;
+        try {
+            nodes = root.findAccessibilityNodeInfosByText("打卡");
+        } catch (Throwable t) {
+            return null;
+        }
+        if (nodes == null) {
+            return null;
+        }
+        for (AccessibilityNodeInfo n : nodes) {
+            if (n == null) {
+                continue;
+            }
+            CharSequence t = n.getText();
+            String s = t == null ? "" : t.toString().trim();
+            boolean ok = s.contains("打卡") && !s.contains("查寝") && !s.contains("时间") && s.length() <= 6;
+            if (ok) {
+                AccessibilityNodeInfo clickable = clickableAncestor(n);
+                recycle(n);
+                if (clickable != null) {
+                    return new Hit(clickable, s);
+                }
+            } else {
+                recycle(n);
             }
         }
         return null;
