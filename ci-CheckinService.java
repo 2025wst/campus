@@ -56,6 +56,8 @@ public class CheckinService extends AccessibilityService {
     private static final long TICK_MS = 800;
     private static final long CLICK_COOLDOWN_MS = 6000;
     private static final long DEADLINE_MS = 4 * 60 * 1000;
+    /** 多个候选坐标之间的间隔 */
+    private static final long TAP_GAP_MS = 2500;
 
     private static CheckinService instance;
 
@@ -72,8 +74,8 @@ public class CheckinService extends AccessibilityService {
     private final java.util.Map<String, Integer> clickCounts = new java.util.HashMap<>();
     private long lastBackAt = 0;
     private int backTries = 0;
-    private boolean tapped = false;
-    private long tappedAt = 0;
+    private int tapIndex = 0;
+    private long lastTapAt = 0;
     private String result = "";
 
     // ------------------------------------------------------------------ 生命周期
@@ -176,8 +178,8 @@ public class CheckinService extends AccessibilityService {
         lastBackAt = 0;
         backTries = 0;
         tickCount = 0;
-        tapped = false;
-        tappedAt = 0;
+        tapIndex = 0;
+        lastTapAt = 0;
     }
 
     // ------------------------------------------------------------------ 状态机
@@ -310,22 +312,23 @@ public class CheckinService extends AccessibilityService {
             }
 
             // 4) 页面在、但内容读不到（学习通关掉了 WebView 无障碍）→ 坐标盲点
-            if (!tapped && elapsed > 12000) {
-                tapped = true;
-                tappedAt = System.currentTimeMillis();
-                float[] pt = readTapPoint();
+            //    支持连点多个候选位置（tap.txt 里用分号分隔），提高一次命中率
+            java.util.List<float[]> pts = readTapPoints();
+            if (elapsed > 10000 && tapIndex < pts.size()
+                    && System.currentTimeMillis() - lastTapAt > TAP_GAP_MS) {
+                float[] pt = pts.get(tapIndex);
                 boolean okTap = tapAt(pt[0], pt[1]);
-                CheckinStatus.appendLog("页面内容读不到，按坐标盲点 (" + pt[0] + "," + pt[1] + ") "
-                        + (okTap ? "已注入" : "注入失败"));
-                CheckinStatus.setLastResult("已按坐标点击，等待确认…");
+                lastTapAt = System.currentTimeMillis();
+                tapIndex++;
+                CheckinStatus.appendLog("盲点 " + tapIndex + "/" + pts.size() + " ("
+                        + pt[0] + "," + pt[1] + ") " + (okTap ? "已注入" : "注入失败"));
+                CheckinStatus.setLastResult("已按坐标点击 " + tapIndex + "/" + pts.size() + "，等待…");
                 return;
             }
 
-            // 5) 点过一次后等 8 秒；再点一次兜底（重复点打卡不会出问题），然后收尾
-            if (tapped && System.currentTimeMillis() - tappedAt > 8000) {
-                float[] pt2 = readTapPoint();
-                tapAt(pt2[0], pt2[1]);
-                finishInfo("已按坐标点击两次，请在 App 里看结果");
+            // 5) 全部点完，静置几秒收尾
+            if (tapIndex >= pts.size() && System.currentTimeMillis() - lastTapAt > 6000) {
+                finishInfo("已按坐标连点 " + tapIndex + " 次，请在 App 里看结果");
                 return;
             }
 
@@ -367,24 +370,33 @@ public class CheckinService extends AccessibilityService {
      * 读 files/tap.txt（内容形如 "0.5,0.79"，表示屏幕宽高的比例）。
      * 用文件而不是硬编码：坐标调起来不用重新打包，adb 一条命令就能改。
      */
-    private float[] readTapPoint() {
-        float rx = 0.5f;
-        float ry = 0.79f;
+    private java.util.List<float[]> readTapPoints() {
+        java.util.List<float[]> out = new java.util.ArrayList<>();
         try {
             java.io.File f = new java.io.File(getFilesDir(), "tap.txt");
             if (f.exists()) {
                 java.io.BufferedReader r = new java.io.BufferedReader(new java.io.FileReader(f));
-                String s = r.readLine();
-                r.close();
-                if (s != null && s.contains(",")) {
-                    String[] xy = s.trim().split(",");
-                    rx = Float.parseFloat(xy[0].trim());
-                    ry = Float.parseFloat(xy[1].trim());
+                String line;
+                while ((line = r.readLine()) != null) {
+                    for (String seg : line.split(";")) {
+                        String s = seg.trim();
+                        if (s.contains(",")) {
+                            String[] xy = s.split(",");
+                            out.add(new float[] {
+                                    Float.parseFloat(xy[0].trim()),
+                                    Float.parseFloat(xy[1].trim())
+                            });
+                        }
+                    }
                 }
+                r.close();
             }
         } catch (Throwable ignored) {
         }
-        return new float[] { rx, ry };
+        if (out.isEmpty()) {
+            out.add(new float[] { 0.5f, 0.79f });
+        }
+        return out;
     }
 
     /** 在屏幕相对位置注入一次点击（比例 0~1 之间）。 */
