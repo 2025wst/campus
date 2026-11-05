@@ -80,13 +80,34 @@ public final class CheckinAlarm {
 
         long at = nextTriggerAt(ctx);
         try {
+            // 用 setAlarmClock：系统会把它当"闹钟应用"对待，
+            // 触发时允许拉起界面（普通 setExact 会被安卓 10+ 的
+            // "后台禁止启动 Activity" 拦掉，华为还会额外拦截一层）。
+            Intent show = new Intent(ctx, MainActivity.class);
+            show.putExtra(MainActivity.EXTRA_AUTO, true);
+            show.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            int sflags = PendingIntent.FLAG_UPDATE_CURRENT;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                sflags |= PendingIntent.FLAG_IMMUTABLE;
+            }
+            PendingIntent showPi = PendingIntent.getActivity(ctx, 2002, show, sflags);
+            AlarmManager.AlarmClockInfo clock =
+                    new AlarmManager.AlarmClockInfo(at, showPi);
+            am.setAlarmClock(clock, pi);
+            CheckinStatus.appendLog("下次定时（闹钟模式）：" + new java.text.SimpleDateFormat("MM-dd HH:mm", Locale.CHINA)
+                    .format(new java.util.Date(at)));
+            return true;
+        } catch (Throwable t) {
+            CheckinStatus.appendLog("闹钟模式设置失败，退回精确闹钟：" + t.getMessage());
+        }
+
+        try {
             if (canExact(ctx)) {
                 am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi);
             } else {
-                // 没有精确闹钟权限时退化为不精确（可能晚几十分钟）
                 am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi);
             }
-            CheckinStatus.appendLog("下次定时：" + new java.text.SimpleDateFormat("MM-dd HH:mm", Locale.CHINA)
+            CheckinStatus.appendLog("下次定时（精确模式）：" + new java.text.SimpleDateFormat("MM-dd HH:mm", Locale.CHINA)
                     .format(new java.util.Date(at)));
             return true;
         } catch (Throwable t) {
@@ -123,6 +144,12 @@ public final class CheckinAlarm {
         public void onReceive(Context context, Intent intent) {
             CheckinStatus.appendLog("定时到点，准备打卡");
             schedule(context);
+            // 先发全屏意图通知：系统会替我们拉起界面（后台直接 startActivity 会被拦）
+            try {
+                Notify.showWake(context);
+            } catch (Throwable t) {
+                CheckinStatus.appendLog("全屏通知失败：" + t.getMessage());
+            }
             try {
                 Intent ui = new Intent(context, MainActivity.class);
                 ui.putExtra(MainActivity.EXTRA_AUTO, true);

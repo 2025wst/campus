@@ -20,6 +20,8 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- 打卡结果通知（失败时一定要让人看见） -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 全屏意图：闹钟到点时让系统替我们拉起界面（绕过后台启动限制） -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
 
     <application
         android:name=".App"

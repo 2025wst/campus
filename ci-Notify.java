@@ -18,6 +18,7 @@ public final class Notify {
 
     private static final String CHANNEL = "checkin";
     private static final int ID = 2001;
+    private static final int ID_WAKE = 2002;
 
     private Notify() {
     }
@@ -42,6 +43,47 @@ public final class Notify {
     /** 已执行但结果未知（坐标盲点）用这个，避免误报"失败"。 */
     public static void showInfo(Context ctx, String message) {
         show(ctx, "查寝打卡：已执行，请确认", message);
+    }
+
+    /**
+     * 到点唤醒：用「全屏意图通知」让系统替我们拉起界面。
+     * 普通 startActivity 在后台会被安卓 10+/华为拦掉（"Abort background activity starts"），
+     * 全屏意图是闹钟类应用的标准豁免通道。
+     */
+    public static void showWake(Context ctx) {
+        try {
+            ensureChannel(ctx);
+            NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm == null) {
+                return;
+            }
+            Intent i = new Intent(ctx, MainActivity.class);
+            i.putExtra(MainActivity.EXTRA_AUTO, true);
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                flags |= PendingIntent.FLAG_IMMUTABLE;
+            }
+            PendingIntent pi = PendingIntent.getActivity(ctx, 3003, i, flags);
+
+            Notification.Builder b;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                b = new Notification.Builder(ctx, CHANNEL);
+            } else {
+                b = new Notification.Builder(ctx);
+            }
+            b.setSmallIcon(android.R.drawable.stat_notify_sync)
+                    .setContentTitle("查寝打卡开始")
+                    .setContentText("正在打开学习通…")
+                    .setPriority(Notification.PRIORITY_HIGH)
+                    .setCategory(Notification.CATEGORY_ALARM)
+                    .setFullScreenIntent(pi, true)
+                    .setAutoCancel(true)
+                    .setContentIntent(pi)
+                    .setWhen(System.currentTimeMillis());
+            nm.notify(ID_WAKE, b.build());
+        } catch (Throwable ignored) {
+        }
     }
 
     public static void show(Context ctx, String title, String message) {
