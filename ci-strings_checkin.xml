@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="accessibility_label">查寝打卡助手</string>
+    <string name="accessibility_desc">用于在每晚固定时间打开学习通并点击「定位打卡」。本服务只读取屏幕上的文字并模拟点击，不会修改任何数据、不会读取账号密码。</string>
+
+    <!-- 用系统自带主题，不依赖 Capacitor/AppCompat 的样式，避免模板版本差异导致编译失败 -->
+    <style name="CheckinTheme" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@android:color/white</item>
+        <item name="android:statusBarColor">@android:color/white</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  无障碍服务的配置文件：
+  - accessibilityEventTypes = typeAllMask：所有界面变化都通知我们（这样能第一时间看到页面加载完）
+  - canRetrieveWindowContent：必须为 true，否则读不到页面上的文字
+  - flagReportViewIds / flagRetrieveInteractiveWindows：拿到控件 id 和多窗口内容
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeAllMask"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault|flagReportViewIds|flagRetrieveInteractiveWindows|flagIncludeNotImportantViews"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/accessibility_desc"
+    android:notificationTimeout="200"
+    android:settingsActivity="com.zzu.checkin.MainActivity" />
