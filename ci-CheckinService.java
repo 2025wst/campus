@@ -247,19 +247,18 @@ public class CheckinService extends AccessibilityService {
 
         // 只在学习通里动作。顺手把"当前前台是谁"记下来，
         // 否则出问题时日志是空的，根本不知道卡在哪一步。
-        AccessibilityNodeInfo probe = getRootInActiveWindow();
+        AccessibilityNodeInfo root = getRootInActiveWindow();
         String pkgName = null;
-        if (probe != null) {
-            CharSequence p = probe.getPackageName();
+        if (root != null) {
+            CharSequence p = root.getPackageName();
             pkgName = p == null ? null : p.toString();
-            recycle(probe);
         }
         if (!PKG_CHAOXING.contentEquals(pkgName)) {
             bringChaoxingToFront(root, elapsed, pkgName);
+            recycle(root);
             return;
         }
 
-        AccessibilityNodeInfo root = getRootInActiveWindow();
         if (root == null) {
             if (tickCount % 15 == 0) {
                 CheckinStatus.appendLog("第 " + tickCount + " 次检查：拿不到界面内容");
