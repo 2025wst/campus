@@ -621,6 +621,67 @@ public class CheckinService extends AccessibilityService {
      * 不能用 startActivity —— 后者会被安卓/华为的"后台禁止拉起界面"拦掉。
      * 但点图标、点最近任务卡片都算用户级操作，系统放行。
      */
+    /**
+     * 点亮屏幕（如果它灭着）。
+     *
+     * 屏幕灭时触摸注入无效、华为还会冻结应用，所以必须先点亮屏幕，
+     * 后面"切学习通、点签到"才有意义。
+     * 用 WakeLock 的 ACQUIRE_CAUSES_WAKEUP 是点亮屏幕的标准做法，
+     * 不需要启动界面，也就不受"后台禁止拉起界面"的限制。
+     */
+    private void wakeScreenIfNeeded() {
+        try {
+            PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+            if (pm == null) {
+                return;
+            }
+            boolean interactive = pm.isInteractive();
+            if (!interactive) {
+                if (wakeLock == null) {
+                    wakeLock = pm.newWakeLock(
+                            PowerManager.SCREEN_BRIGHT_WAKE_LOCK | PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                            "checkin:screen");
+                    wakeLock.setReferenceCounted(false);
+                }
+                wakeLock.acquire(5 * 60 * 1000L);
+                CheckinStatus.appendLog("屏幕是灭的，已请求点亮");
+            }
+        } catch (Throwable t) {
+            CheckinStatus.appendLog("点亮屏幕失败：" + t.getClass().getSimpleName());
+        }
+    }
+
+    /** 如果还停在锁屏，向上滑一下解锁（这台平板没有密码）。 */
+    private void dismissKeyguardIfNeeded() {
+        try {
+            KeyguardManager km = (KeyguardManager) getSystemService(Context.KEYGUARD_SERVICE);
+            if (km == null || !km.isKeyguardLocked()) {
+                return;
+            }
+            DisplayMetrics dm = getResources().getDisplayMetrics();
+            float x = dm.widthPixels * 0.5f;
+            Path p = new Path();
+            p.moveTo(x, dm.heightPixels * 0.85f);
+            p.lineTo(x, dm.heightPixels * 0.25f);
+            GestureDescription.StrokeDescription stroke =
+                    new GestureDescription.StrokeDescription(p, 0, 200);
+            GestureDescription gd = new GestureDescription.Builder().addStroke(stroke).build();
+            boolean ok = dispatchGesture(gd, null, null);
+            CheckinStatus.appendLog("检测到锁屏，已上滑解锁 " + (ok ? "成功" : "失败"));
+        } catch (Throwable t) {
+            CheckinStatus.appendLog("解锁失败：" + t.getClass().getSimpleName());
+        }
+    }
+
+    private void releaseWakeLock() {
+        try {
+            if (wakeLock != null && wakeLock.isHeld()) {
+                wakeLock.release();
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
     private void bringChaoxingToFront(AccessibilityNodeInfo root, long elapsed, String pkgName) {
         long now = System.currentTimeMillis();
         if (now - lastBringAt < 5000) {
