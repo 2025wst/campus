@@ -83,6 +83,8 @@ public class CheckinService extends AccessibilityService {
     private int tapIndex = 0;
     private long lastTapAt = 0;
     private boolean refreshed = false;
+    private long pageSeenAt = 0;
+    private final android.graphics.Rect winRect = new android.graphics.Rect();
     private PowerManager.WakeLock wakeLock;
     private int bringStep = 0;
     private long lastBringAt = 0;
@@ -192,6 +194,7 @@ public class CheckinService extends AccessibilityService {
         tapIndex = 0;
         lastTapAt = 0;
         refreshed = false;
+        pageSeenAt = 0;
         bringStep = 0;
         lastBringAt = 0;
     }
@@ -302,9 +305,25 @@ public class CheckinService extends AccessibilityService {
             //    强制页面重新加载（打卡页不会自己刷新状态，21:00 之后还显示"未到时间"）。
             //    整个流程都发生在学习通内部，不需要启动任何界面，
             //    从而绕开华为"后台禁止拉起界面"的限制。
-            if (!refreshed && containsText(texts, "查寝定位打卡")) {
+            boolean onPage = containsText(texts, "查寝定位打卡");
+            if (onPage) {
+                // 记下"打卡页这个窗口"在屏幕上的范围：
+                // 学习通可能是浮窗、左右分屏或全屏，但按钮总是在窗口的
+                // 宽度 50% / 高度 84% 附近，所以按窗口算就与布局无关。
+                try {
+                    root.getBoundsInScreen(winRect);
+                } catch (Throwable ignored) {
+                }
+                if (pageSeenAt == 0) {
+                    pageSeenAt = System.currentTimeMillis();
+                }
+            }
+            if (!refreshed && onPage) {
                 refreshed = true;
                 boolean okBack = tapAt(BACK_X, BACK_Y);
+                // 退回首页等重新进来，重置盲点计数，别把次数耗在"还没加载"的时候
+                tapIndex = 0;
+                pageSeenAt = 0;
                 CheckinStatus.appendLog("已在打卡页，先返回以便重新加载（" + (okBack ? "已注入" : "注入失败") + "）");
                 CheckinStatus.setLastResult("正在重新加载打卡页…");
                 return;
@@ -360,21 +379,46 @@ public class CheckinService extends AccessibilityService {
             // 4) 页面在、但内容读不到（学习通关掉了 WebView 无障碍）→ 坐标盲点
             //    支持连点多个候选位置（tap.txt 里用分号分隔），提高一次命中率
             java.util.List<float[]> pts = readTapPoints();
-            if (elapsed > 10000 && tapIndex < pts.size()
+            boolean pageReady = pageSeenAt > 0 && System.currentTimeMillis() - pageSeenAt > 4000;
+
+            // 窗口内相对位置：x=50%，y 依次 82% / 84.5% / 87%（按钮是一条很宽的横条）
+            final float[] RY = { 0.82f, 0.845f, 0.87f };
+            boolean hasWindow = winRect.width() > 100 && winRect.height() > 100;
+            int total = hasWindow ? (RY.length + 1) : pts.size();
+
+            if (pageReady && tapIndex < total
                     && System.currentTimeMillis() - lastTapAt > TAP_GAP_MS) {
-                float[] pt = pts.get(tapIndex);
-                boolean okTap = tapAt(pt[0], pt[1]);
+                boolean okTap;
+                if (hasWindow) {
+                    if (tapIndex < RY.length) {
+                        int x = winRect.left + Math.round(winRect.width() * 0.5f);
+                        int y = winRect.top + Math.round(winRect.height() * RY[tapIndex]);
+                        okTap = tapAbs(x, y);
+                        CheckinStatus.appendLog("点窗口内 (50%," + Math.round(RY[tapIndex] * 100)
+                                + "%) → " + x + "," + y + " " + (okTap ? "已注入" : "注入失败")
+                                + " 窗口=" + winRect.left + "," + winRect.top + "+" + winRect.width() + "x" + winRect.height());
+                    } else {
+                        // 最后一发：退回到 tap.txt 里的候选点（双保险）
+                        float[] pt = pts.get(0);
+                        okTap = tapAt(pt[0], pt[1]);
+                        CheckinStatus.appendLog("备用坐标 (" + pt[0] + "," + pt[1] + ") "
+                                + (okTap ? "已注入" : "注入失败"));
+                    }
+                } else {
+                    float[] pt = pts.get(tapIndex);
+                    okTap = tapAt(pt[0], pt[1]);
+                    CheckinStatus.appendLog("拿不到窗口范围，用固定坐标 (" + pt[0] + "," + pt[1] + ") "
+                            + (okTap ? "已注入" : "注入失败"));
+                }
                 lastTapAt = System.currentTimeMillis();
                 tapIndex++;
-                CheckinStatus.appendLog("盲点 " + tapIndex + "/" + pts.size() + " ("
-                        + pt[0] + "," + pt[1] + ") " + (okTap ? "已注入" : "注入失败"));
-                CheckinStatus.setLastResult("已按坐标点击 " + tapIndex + "/" + pts.size() + "，等待…");
+                CheckinStatus.setLastResult("已点击 " + tapIndex + "/" + total + "，等待结果…");
                 return;
             }
 
             // 5) 全部点完，静置几秒收尾
-            if (tapIndex >= pts.size() && System.currentTimeMillis() - lastTapAt > 6000) {
-                finishInfo("已按坐标连点 " + tapIndex + " 次，请在 App 里看结果");
+            if (pageReady && tapIndex >= total && System.currentTimeMillis() - lastTapAt > 6000) {
+                finishInfo("已连点 " + tapIndex + " 次，请在 App 里看结果");
                 return;
             }
 
@@ -443,6 +487,24 @@ public class CheckinService extends AccessibilityService {
             out.add(new float[] { 0.5f, 0.79f });
         }
         return out;
+    }
+
+    /** 按绝对屏幕坐标注入一次点击。 */
+    private boolean tapAbs(int x, int y) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+            return false;
+        }
+        try {
+            Path p = new Path();
+            p.moveTo(x, y);
+            GestureDescription.StrokeDescription stroke =
+                    new GestureDescription.StrokeDescription(p, 0, 60);
+            GestureDescription gd = new GestureDescription.Builder().addStroke(stroke).build();
+            return dispatchGesture(gd, null, null);
+        } catch (Throwable t) {
+            CheckinStatus.appendLog("注入点击失败：" + t.getClass().getSimpleName());
+            return false;
+        }
     }
 
     /** 在屏幕相对位置注入一次点击（比例 0~1 之间）。 */
