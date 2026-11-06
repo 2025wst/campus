@@ -5,7 +5,9 @@ import android.accessibilityservice.AccessibilityServiceInfo;
 import android.accessibilityservice.GestureDescription;
 import android.content.Context;
 import android.content.Intent;
+import android.app.KeyguardManager;
 import android.graphics.Path;
+import android.os.PowerManager;
 import android.os.Build;
 import android.util.DisplayMetrics;
 import android.util.Log;
@@ -81,6 +83,7 @@ public class CheckinService extends AccessibilityService {
     private int tapIndex = 0;
     private long lastTapAt = 0;
     private boolean refreshed = false;
+    private PowerManager.WakeLock wakeLock;
     private int bringStep = 0;
     private long lastBringAt = 0;
     private String result = "";
@@ -161,6 +164,7 @@ public class CheckinService extends AccessibilityService {
         svc.stageReset();
         svc.result = "";
         CheckinStatus.markRunStart();
+        svc.wakeScreenIfNeeded();
         CheckinStatus.setRunning(true);
         CheckinStatus.setLastResult("开始执行…");
         CheckinStatus.appendLog("开始执行查寝打卡");
@@ -240,9 +244,34 @@ public class CheckinService extends AccessibilityService {
         }
         tickCount++;
         long elapsed = System.currentTimeMillis() - startedAt;
+        // 屏幕灭着的时候一切点击都无效，先点亮 + 解锁
+        // 注意：超时判定必须放在最前面，否则"屏幕点不亮"会一直 return，
+        // 永远走不到超时分支 —— 那样就变成无声失败了。
         if (elapsed > DEADLINE_MS) {
             finish("超时：4 分钟没等到结果", false);
             return;
+        }
+
+        try {
+            PowerManager pm2 = (PowerManager) getSystemService(Context.POWER_SERVICE);
+            boolean on = pm2 != null && (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT_WATCH
+                    ? pm2.isInteractive() : pm2.isScreenOn());
+            if (!on) {
+                if (tickCount % 5 == 0) {
+                    wakeScreenIfNeeded();
+                    CheckinStatus.setLastResult("屏幕已灭，正在点亮…（已等 " + (elapsed / 1000) + " 秒）");
+                }
+                // 超过 90 秒还点不亮，明确失败并通知，避免无声卡死
+                if (elapsed > 90000) {
+                    finish("屏幕一直没点亮（可能被系统限制），打卡未执行", false);
+                }
+                return;
+            }
+            // 屏幕亮着但可能停在锁屏，每隔几秒尝试上滑解锁
+            if (tickCount % 8 == 0) {
+                dismissKeyguardIfNeeded();
+            }
+        } catch (Throwable ignored) {
         }
 
         // 只在学习通里动作。顺手把"当前前台是谁"记下来，
@@ -451,6 +480,7 @@ public class CheckinService extends AccessibilityService {
         CheckinStatus.setLastResult(message);
         CheckinStatus.appendLog(message);
         CheckinStatus.recordResult(true, message);
+        releaseWakeLock();
         try {
             Notify.showInfo(getApplicationContext(), message);
         } catch (Throwable ignored) {
@@ -474,6 +504,7 @@ public class CheckinService extends AccessibilityService {
         CheckinStatus.setLastResult(message);
         CheckinStatus.appendLog(message);
         CheckinStatus.recordResult(success, message);
+        releaseWakeLock();
         // 失败一定要让人看见（静默失败是这套方案最大的风险）
         try {
             Notify.show(getApplicationContext(), success, message);
@@ -600,27 +631,31 @@ public class CheckinService extends AccessibilityService {
         bringStep++;
         switch (bringStep) {
             case 1:
-                performGlobalAction(GLOBAL_ACTION_HOME);
-                CheckinStatus.appendLog("学习通不在前台（当前 " + pkgName + "），先回桌面");
+                // 首选"最近任务"：华为桌面不暴露应用名，找不到图标；
+                // 而最近任务的卡片能被无障碍读到，实测可用。
+                performGlobalAction(GLOBAL_ACTION_RECENTS);
+                CheckinStatus.appendLog("学习通不在前台（当前 " + pkgName + "），打开最近任务");
                 CheckinStatus.setLastResult("正在切回学习通…");
                 break;
             case 2:
             case 3:
-            case 4: {
+            case 4:
+            case 5: {
                 boolean ok = clickTextOrDesc(root, "学习通");
-                CheckinStatus.appendLog("在桌面找「学习通」图标并点击：" + (ok ? "成功" : "没找到") + "（第 " + (bringStep - 1) + " 次）");
-                CheckinStatus.setLastResult(ok ? "已点学习通，等待启动…" : "桌面没找到学习通图标，换最近任务");
+                CheckinStatus.appendLog("最近任务里点「学习通」：" + (ok ? "成功" : "没找到")
+                        + "（第 " + (bringStep - 1) + " 次）");
+                CheckinStatus.setLastResult(ok ? "已点学习通，等待打开…" : "最近任务没找到，再试");
                 break;
             }
-            case 5:
-                performGlobalAction(GLOBAL_ACTION_RECENTS);
-                CheckinStatus.appendLog("改用最近任务切换");
-                break;
             case 6:
+                performGlobalAction(GLOBAL_ACTION_HOME);
+                CheckinStatus.appendLog("最近任务不行，回桌面再找图标");
+                break;
             case 7:
-            case 8: {
+            case 8:
+            case 9: {
                 boolean ok = clickTextOrDesc(root, "学习通");
-                CheckinStatus.appendLog("在最近任务里点学习通：" + (ok ? "成功" : "没找到"));
+                CheckinStatus.appendLog("桌面点「学习通」：" + (ok ? "成功" : "没找到"));
                 break;
             }
             default:

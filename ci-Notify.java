@@ -16,7 +16,9 @@ import android.os.Build;
  */
 public final class Notify {
 
-    private static final String CHANNEL = "checkin";
+    private static final String CHANNEL = "checkin_v2";
+    // 用新通道 id：安卓不允许修改已存在通道的声音设置，只能换一个
+    
     private static final int ID = 2001;
     private static final int ID_WAKE = 2002;
 
@@ -32,7 +34,11 @@ public final class Notify {
             return;
         }
         NotificationChannel ch = new NotificationChannel(CHANNEL, "打卡结果", NotificationManager.IMPORTANCE_HIGH);
-        ch.setDescription("查寝打卡成功或失败的通知");
+        ch.setDescription("查寝打卡成功或失败的通知（静音，不打扰）");
+        // 关键：保持高重要性（全屏唤醒需要），但关掉声音和震动
+        ch.setSound(null, null);
+        ch.enableVibration(false);
+        ch.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
         nm.createNotificationChannel(ch);
     }
 

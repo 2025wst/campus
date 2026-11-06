@@ -145,9 +145,17 @@ public final class CheckinAlarm {
             CheckinStatus.appendLog("定时到点，准备打卡");
             schedule(context);
 
+            // 先发"全屏意图"通知：
+            // 屏幕熄灭/锁屏时，系统走这条路会直接拉起界面（这是官方允许的唤醒方式）；
+            // 屏幕亮着时它只会显示一条通知，不打扰。
+            try {
+                Notify.showWake(context);
+            } catch (Throwable t) {
+                CheckinStatus.appendLog("全屏通知失败：" + t.getMessage());
+            }
+
             // 首选：直接让常驻的无障碍服务干活。
             // 不启动任何界面 ⇒ 不受安卓/华为"后台禁止拉起界面"的限制。
-            // 前提是学习通已经在前台（平板平时就停在学习通里）。
             try {
                 if (CheckinService.start(context)) {
                     CheckinStatus.appendLog("已交给无障碍服务执行（无需拉起界面）");
@@ -158,12 +166,8 @@ public final class CheckinAlarm {
                 CheckinStatus.appendLog("启动服务失败：" + t.getMessage());
             }
 
-            // 兜底：发全屏意图通知 + 直接拉起界面（屏幕亮着时可能被拦，仅作备用）
-            try {
-                Notify.showWake(context);
-            } catch (Throwable t) {
-                CheckinStatus.appendLog("全屏通知失败：" + t.getMessage());
-            }
+            // 兜底：再试一次直接拉起界面
+
             try {
                 Intent ui = new Intent(context, MainActivity.class);
                 ui.putExtra(MainActivity.EXTRA_AUTO, true);
