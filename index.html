@@ -2793,8 +2793,11 @@ __mod["src/features/expense/view.js"] = (function(){ /**
  * 记账页面：快速记一笔 + 月度汇总 + 账单导入。
  */const { getState, update, uid } = __mod["src/util/store.js"];const { todayISO, md, relativeDay, diffDays } = __mod["src/util/date.js"];const { h, money, toast, readTextFile, esc } = __mod["src/util/format.js"];const { CATEGORIES, CATEGORY_MAP, parseStatement } = __mod["src/features/expense/import.js"];
 let viewMonth = todayISO().slice(0, 7); // 'YYYY-MM'
+let groupMode = 'date'; // 'date' | 'cat' —— 明细按什么分组
+let lastRoot = null;
 
 function renderExpense(root) {
+  lastRoot = root;
   const state = getState();
   const month = viewMonth;
   const list = state.expenses
@@ -2883,10 +2886,59 @@ function renderExpense(root) {
     frag.appendChild(h('div.card', [buildBars(list, total)]));
   }
 
-  /* 明细 */
-  frag.appendChild(h('div.section-title', [h('span', '明细'), h('span.tiny', '点击一条可删除')]));
+  /* 明细（可按日期 / 按分类） */
+  frag.appendChild(
+    h('div.section-title', [
+      h('span', '明细'),
+      h('div.row', { style: { gap: '6px' } }, [
+        h(`button.chip${groupMode === 'date' ? '.on' : ''}`, {
+          style: { height: '28px', padding: '0 10px', fontSize: '12px' },
+          onclick: () => {
+            groupMode = 'date';
+            if (lastRoot) renderExpense(lastRoot);
+          },
+        }, '按日期'),
+        h(`button.chip${groupMode === 'cat' ? '.on' : ''}`, {
+          style: { height: '28px', padding: '0 10px', fontSize: '12px' },
+          onclick: () => {
+            groupMode = 'cat';
+            if (lastRoot) renderExpense(lastRoot);
+          },
+        }, '按分类'),
+      ]),
+    ])
+  );
+
   if (!list.length) {
     frag.appendChild(h('div.card.empty', '这个月还没有支出记录'));
+  } else if (groupMode === 'cat') {
+    /* 按分类分组：同类归在一起，每组一个小计 */
+    const byCat = new Map();
+    for (const e of list) {
+      const k = e.category || 'other';
+      if (!byCat.has(k)) byCat.set(k, []);
+      byCat.get(k).push(e);
+    }
+    const rows = [...byCat.entries()].sort(
+      (a, b) =>
+        b[1].reduce((s, x) => s + Number(x.amount || 0), 0) -
+        a[1].reduce((s, x) => s + Number(x.amount || 0), 0)
+    );
+    for (const [key, items] of rows) {
+      const cat = CATEGORY_MAP[key] || CATEGORY_MAP.other;
+      const sum = items.reduce((s, x) => s + Number(x.amount || 0), 0);
+      const card = h('div.card', { style: { paddingTop: '4px', paddingBottom: '4px', marginBottom: '10px' } });
+      card.appendChild(
+        h('div.row.between', { style: { padding: '10px 0 4px' } }, [
+          h('span', { style: { fontWeight: '600' } }, `${cat.icon} ${cat.name}`),
+          h('span.tiny', `${items.length} 笔 · ${money(sum)}`),
+        ])
+      );
+      for (const e of items) {
+        card.appendChild(expenseRow(e, cat));
+      }
+      frag.appendChild(card);
+    }
   } else {
     const card = h('div.card', { style: { paddingTop: '4px', paddingBottom: '4px' } });
     let lastDate = '';
@@ -2900,17 +2952,7 @@ function renderExpense(root) {
           ])
         );
       }
-      const cat = CATEGORY_MAP[e.category] || CATEGORY_MAP.other;
-      card.appendChild(
-        h('div.exp-item', { onclick: () => openDetail(e) }, [
-          h('div.exp-ico', cat.icon),
-          h('div.grow', [
-            h('div.ellipsis', cat.name + (e.note ? ` · ${e.note}` : '')),
-            h('div.tiny', srcLabel(e.src)),
-          ]),
-          h('div.val', money(e.amount)),
-        ])
-      );
+      card.appendChild(expenseRow(e, CATEGORY_MAP[e.category] || CATEGORY_MAP.other));
     }
     frag.appendChild(card);
   }
@@ -3088,6 +3130,20 @@ function renderExpense(root) {
       );
     }
     return box;
+  }
+
+  /** 一条记录：主标题是"买了什么"，副标题是"分类 + 来源"，右侧是金额。 */
+  function expenseRow(e, cat) {
+    const title = e.note && e.note !== '自动记账' ? e.note : `${cat.name}`;
+    const sub = [cat.name, srcLabel(e.src)].filter(Boolean).join(' · ');
+    return h('div.exp-item', { onclick: () => openDetail(e) }, [
+      h('div.exp-ico', cat.icon),
+      h('div.grow', [
+        h('div.ellipsis', title),
+        h('div.tiny', sub),
+      ]),
+      h('div.val', money(e.amount)),
+    ]);
   }
 
   function openDetail(e) {
@@ -3936,7 +3992,7 @@ function applyExpense(notif) {
       date,
       amount: hit.amount,
       category: categorizeWithMemory(`${hit.merchant} ${hit.text}`, s.merchantCat),
-      note: hit.merchant || '自动记账',
+      note: hit.merchant || (hit.source ? `${hit.source}付款` : '自动记账'),
       src: 'auto',
       notifKey: notifKey || undefined,
       createdAt: when.getTime(),
