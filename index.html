@@ -982,8 +982,7 @@ __mod["src/util/store.js"] = (function(){ /**
  * 数据仓库：所有数据存在浏览器本地（localStorage），不联网、不上传。
  * 结构固定在这一层，界面上加功能只需要往 state 里加字段，
  * 并在 migrate() 里写一次默认值。
- */
-const { DEFAULT_SEMESTER_START } = __mod["src/util/date.js"];
+ */const { DEFAULT_SEMESTER_START } = __mod["src/util/date.js"];
 const KEY = 'campus.state.v1';
 const listeners = new Set();
 
@@ -999,7 +998,8 @@ function blankState() {
     courses: [], // 见 features/timetable/data.js
     expenses: [], // {id, date, amount, category, note, createdAt, src}
   incomes: [], // {id, date, amount, kind, note, src, createdAt}
-  merchantCat: {}, // {"二食堂":"eat"} —— 用户改过分类的商户会记住
+  merchantCat: {}, // 用户改过分类的商户会记住
+  merchantAlias: {}, // 用户改过名字的商户会记住
     todos: [], // {id, text, due, done, createdAt}
     ui: { week: null }, // 课表当前查看的周
   };
@@ -2496,7 +2496,7 @@ const RULES = [
   [/转账|红包|收款|退款|退回|还款|信用卡还款/i, 'transfer'],
 
   // 吃：校内食堂、外卖、快餐、饮品
-  [/食堂|餐厅|餐饮|小吃|快餐|外卖|饿了么|美团外卖|饭|面馆|拉面|米线|粉|粥|饺子|包子|馄饨|麻辣烫|冒菜|烧烤|火锅|炸鸡|汉堡|披萨|肯德基|麦当劳|华莱士|塔斯汀|正新|杨国福|张亮|沙县|兰州|黄焖鸡|螺蛳粉|瑞幸|星巴克|库迪|奶茶|咖啡|蜜雪|茶百道|古茗|沪上阿姨|喜茶|奈雪|一点点|书亦|酸奶|水果|面包|蛋糕|烘焙|早餐|早点|夜宵|饮品|饮料|便利店.*食品/i, 'eat'],
+  [/食堂|餐厅|餐饮|小吃|快餐|外卖|饿了么|美团外卖|饭|面馆|拉面|米线|粉|粥|饺子|包子|馄饨|麻辣烫|冒菜|烧烤|火锅|炸鸡|汉堡|披萨|肯德基|麦当劳|华莱士|塔斯汀|正新|杨国福|张亮|沙县|兰州|黄焖鸡|螺蛳粉|瑞幸|星巴克|库迪|奶茶|咖啡|蜜雪|茶百道|古茗|沪上阿姨|喜茶|奈雪|一点点|书亦|酸奶|水果|面包|蛋糕|烘焙|早餐|早点|夜宵|饮品|饮料|饮料机|售货机|友宝|水果|苹果|香蕉|菠萝|橙子|葡萄|西瓜|零食|便利店.*食品/i, 'eat'],
 
   // 行：地铁、公交、打车、单车、火车
   [/郑州地铁|地铁|轨道交通|公交|快速公交|BRT|滴滴|出租车|网约车|高德打车|曹操|T3|花小猪|哈啰|青桔|美团单车|共享单车|单车|火车|高铁|12306|铁路|机票|航空|机场|加油站|加油|停车|过路费|ETC|充电桩|校园班车/i, 'transport'],
@@ -2511,7 +2511,7 @@ const RULES = [
   [/电影|影院|影城|游戏|steam|网吧|电竞|KTV|演出|演唱会|门票|景区|健身|健身房|球馆|游泳|台球|剧本杀|密室|音乐|会员|腾讯视频|爱奇艺|优酷|哔哩|B站|网易云|QQ音乐|视频会员/i, 'fun'],
 
   // 过日子：水电、洗衣、快递、日用
-  [/水费|电费|燃气|暖气|洗衣|洗浴|浴室|澡堂|开水|理发|美发|快递|菜鸟|驿站|顺丰|宿舍|物业|日用|纸巾|牙膏|洗护|毛巾|五金|维修/i, 'daily'],
+  [/水费|电费|燃气|暖气|洗衣|洗浴|浴室|澡堂|开水|接水|饮水|直饮水|售水|自助服务|理发|美发|快递|菜鸟|驿站|顺丰|宿舍|物业|日用|纸巾|牙膏|洗护|毛巾|五金|维修|卸妆|洗面奶|护肤品|面霜|洗发水|沐浴露|洗衣液|洗手液|牙膏|纸巾|湿巾/i, 'daily'],
 
   // 通信：话费流量宽带
   [/话费|流量|中国移动|中国联通|中国电信|联通|移动|电信|宽带|校园网|网费/i, 'call'],
@@ -2787,13 +2787,63 @@ function parseNotify(n) {
   };
 }
 
- return { parseNotify }; })();
+/** 把常见的"机器/平台名"翻译成人话，列表里更清楚。 */
+const FRIENDLY = [
+  // —— 校园日常 ——
+  [/智能自助服务|自助服务|直饮水|饮水机|开水机|售水机|直饮/, '接水'],
+  [/友宝|自动售货|售货机/, '饮料机'],
+  [/菜鸟驿站|菜鸟|快递驿站|驿站|快递柜|丰巢/, '取快递'],
+  [/洗衣房|洗衣机|U净|海尔洗衣|洗衣服/, '洗衣'],
+  [/打印|复印|文印|图文店/, '打印'],
+  [/理发|美发|剪发/, '理发'],
+  [/浴室|澡堂|洗浴|洗澡/, '洗澡'],
+  [/校医院|医务室/, '看病'],
+  [/药房|药店|大药房/, '买药'],
+  // 食堂保留原名称（"二食堂"比"吃饭"更有信息量）
+  [/水果/, '买水果'],
+  [/超市|便利店|小卖部|百货/, '超市'],
+
+  // —— 吃 ——
+
+  [/蜜雪|茶百道|古茗|沪上|喜茶|奈雪|一点点|书亦|奶茶/, '奶茶'],
+  [/瑞幸|星巴克|库迪|咖啡/, '咖啡'],
+  [/饿了么|美团外卖|外卖/, '点外卖'],
+  [/肯德基|麦当劳|华莱士|塔斯汀|汉堡|炸鸡/, '快餐'],
+  [/面馆|拉面|米线|粉店/, '吃面'],
+
+  // —— 行 ——
+  [/郑州地铁|地铁|轨道交通/, '坐地铁'],
+  [/公交|快速公交|BRT/, '坐公交'],
+  [/哈啰|青桔|美团单车|共享单车|单车/, '骑单车'],
+  [/滴滴|出租车|网约车|高德打车|曹操|T3|花小猪/, '打车'],
+  [/铁路|12306|火车|高铁/, '坐火车'],
+  [/加油|加油站|充电桩/, '加油充电'],
+
+  // —— 玩 / 学 ——
+  [/电影|影院|影城/, '看电影'],
+  [/剧本杀|密室/, '剧本杀'],
+  [/健身|健身房|球馆|游泳/, '运动'],
+  [/书店|当当|图书/, '买书'],
+  [/网课|课程|学费/, '学习'],
+];
+
+/** 返回更适合显示的商户名（没命中就原样返回）。 */
+function friendlyMerchant(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  for (const [re, name] of FRIENDLY) {
+    if (re.test(s)) return name;
+  }
+  return s;
+}
+
+ return { parseNotify, friendlyMerchant }; })();
 
 __mod["src/features/expense/view.js"] = (function(){ /**
  * 记账页面：快速记一笔 + 月度汇总 + 账单导入。
  */const { getState, update, uid } = __mod["src/util/store.js"];const { todayISO, md, relativeDay, diffDays } = __mod["src/util/date.js"];const { h, money, toast, readTextFile, esc } = __mod["src/util/format.js"];const { CATEGORIES, CATEGORY_MAP, parseStatement } = __mod["src/features/expense/import.js"];
 let viewMonth = todayISO().slice(0, 7); // 'YYYY-MM'
-let groupMode = 'date'; // 'date' | 'cat' —— 明细按什么分组
+let groupMode = 'cat'; // 'date' | 'cat' —— 明细按什么分组
 let lastRoot = null;
 
 function renderExpense(root) {
@@ -3153,8 +3203,39 @@ function renderExpense(root) {
       h('div.grab'),
       h('h2', money(e.amount)),
       h('p.muted', { style: { margin: '2px 0 12px' } }, `${md(e.date)} · ${cat.icon} ${cat.name}`),
-      h('div.kv', [h('span', '备注'), h('span.v', e.note || '—')]),
+      h('div.kv', [h('span', '名称'), h('span.v', e.note || '—')]),
       h('div.kv', [h('span', '来源'), h('span.v', srcLabel(e.src))]),
+      h('div', { style: { marginTop: '12px' } }, [
+        h('div.tiny', { style: { marginBottom: '6px' } }, '改个名字（会记住这个商户）'),
+        (() => {
+          const input = h('input', {
+            type: 'text',
+            value: e.note || '',
+            placeholder: '例如：接水 / 水果 / 卸妆水',
+            maxlength: '20',
+            style: { width: '100%', height: '40px', padding: '0 12px', borderRadius: '10px', border: '1px solid #E6E8EC' },
+          });
+          const btn = h('button.btn.sm.primary', {
+            style: { marginTop: '8px' },
+            onclick: () => {
+              const name = input.value.trim();
+              if (!name) return;
+              update((s) => {
+                const it = s.expenses.find((x) => x.id === e.id);
+                if (it) it.note = name;
+                const key = e.merchantKey || '';
+                if (key) {
+                  s.merchantAlias = s.merchantAlias || {};
+                  s.merchantAlias[key] = name;
+                }
+              });
+              mask.remove();
+              toast(`已改名为「${name}」`);
+            },
+          }, '保存名字');
+          return h('div', [input, btn]);
+        })(),
+      ]),
       h('div.section-title', { style: { marginTop: '14px' } }, [h('span', '改成哪一类'), h('span.tiny', '会记住这个商户')]),
       h('div.chips', { style: { gridTemplateColumns: 'repeat(3, 1fr)' } },
         CATEGORIES.map((c) =>
@@ -3837,7 +3918,7 @@ __mod["src/main.js"] = (function(){ /**
  *   1. 在 src/features/<名字>/ 下写 view.js（导出 renderXxx(root)）
  *   2. 在下方 ROUTES 里加一项
  *   3. 在 index.html 的 tabbar 里加一个 tab
- */const { getState, seedIfEmpty, subscribe, update } = __mod["src/util/store.js"];const { toast } = __mod["src/util/format.js"];const { SEED_COURSES } = __mod["src/features/timetable/data.js"];const { renderTimetable } = __mod["src/features/timetable/view.js"];const { renderExpense } = __mod["src/features/expense/view.js"];const { renderTodo } = __mod["src/features/todo/view.js"];const { renderSettings } = __mod["src/features/settings/view.js"];const { rowsToCourses } = __mod["src/features/timetable/eams.js"];const { parseNotify } = __mod["src/features/expense/auto.js"];const { categorize, categorizeWithMemory } = __mod["src/features/expense/import.js"];const { todayISO, toISO } = __mod["src/util/date.js"];const { uid } = __mod["src/util/store.js"];
+ */const { getState, seedIfEmpty, subscribe, update } = __mod["src/util/store.js"];const { toast } = __mod["src/util/format.js"];const { SEED_COURSES } = __mod["src/features/timetable/data.js"];const { renderTimetable } = __mod["src/features/timetable/view.js"];const { renderExpense } = __mod["src/features/expense/view.js"];const { renderTodo } = __mod["src/features/todo/view.js"];const { renderSettings } = __mod["src/features/settings/view.js"];const { rowsToCourses } = __mod["src/features/timetable/eams.js"];const { parseNotify, friendlyMerchant } = __mod["src/features/expense/auto.js"];const { categorize, categorizeWithMemory } = __mod["src/features/expense/import.js"];const { todayISO, toISO } = __mod["src/util/date.js"];const { uid } = __mod["src/util/store.js"];
 const ROUTES = {
   timetable: { title: '课表', render: renderTimetable },
   expense: { title: '记账', render: renderExpense },
@@ -3943,6 +4024,17 @@ window.__campusImport = function (raw) {
 };
 
 /** 一条通知 → 一笔账单。返回是否真的入库。 */
+
+/** 显示名优先级：用户改过的名字 > 内置友好名 > 商户原名 > 来源。 */
+function pickDisplayName(hit, state) {
+  const raw = hit.merchant || '';
+  const alias = (state && state.merchantAlias && raw) ? state.merchantAlias[raw] : '';
+  if (alias) return alias;
+  const friendly = friendlyMerchant(raw);
+  if (friendly) return friendly;
+  return hit.source ? `${hit.source}付款` : '自动记账';
+}
+
 function applyExpense(notif) {
   const hit = parseNotify(notif);
   if (!hit) return false;
@@ -3992,7 +4084,8 @@ function applyExpense(notif) {
       date,
       amount: hit.amount,
       category: categorizeWithMemory(`${hit.merchant} ${hit.text}`, s.merchantCat),
-      note: hit.merchant || (hit.source ? `${hit.source}付款` : '自动记账'),
+      note: pickDisplayName(hit, state),
+      merchantKey: hit.merchant || '',
       src: 'auto',
       notifKey: notifKey || undefined,
       createdAt: when.getTime(),
