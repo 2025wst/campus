@@ -25,7 +25,13 @@ import java.lang.ref.WeakReference;
 public class ExpenseListener extends NotificationListenerService {
 
     /** 目前只关心这两个包（微信、支付宝）。 */
-    private static final String[] PKGS = { "com.tencent.mm", "com.eg.android.AlipayGphone" };
+    private static final String[] PKGS = {
+            "com.tencent.mm",              // 微信（含微信支付）
+            "com.eg.android.AlipayGphone", // 支付宝
+            "com.unionpay",                // 云闪付
+            "com.sankuai.meituan",         // 美团
+            "me.ele",                      // 饿了么
+    };
 
     private static final String PREFS = "campus_pending";
     private static final String KEY = "queue";
@@ -35,6 +41,27 @@ public class ExpenseListener extends NotificationListenerService {
 
     @Override
     public void onNotificationPosted(StatusBarNotification sbn) {
+        handle(sbn);
+    }
+
+    /**
+     * 服务重新连上时，把通知栏里"还挂着"的通知补抓一遍。
+     * 这样即使 App 之前被系统杀掉、错过了推送，只要通知还没被用户划掉，就能补回来。
+     */
+    @Override
+    public void onListenerConnected() {
+        super.onListenerConnected();
+        try {
+            StatusBarNotification[] actives = getActiveNotifications();
+            if (actives == null) return;
+            for (StatusBarNotification s : actives) {
+                handle(s);
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private void handle(StatusBarNotification sbn) {
         try {
             if (sbn == null) return;
             String pkg = sbn.getPackageName();

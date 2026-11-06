@@ -9,8 +9,8 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default" />
 <meta name="description" content="课表、记账、待办——你的校园生活助手" />
 <link rel="manifest" href="./manifest.webmanifest" />
-<link rel="apple-touch-icon" href="./icon-192.png" />
-<link rel="icon" href="./icon-192.png" />
+<link rel="apple-touch-icon" href="./assets/icon-192.png" />
+<link rel="icon" href="./assets/icon-192.png" />
 <style>
 /* 校园通 · 设计系统
  * 原则：纯白底 + 一个主色（郑大蓝）+ 大量留白；字号只用 11/13/15/17/22 五档。
@@ -998,6 +998,8 @@ function blankState() {
     },
     courses: [], // 见 features/timetable/data.js
     expenses: [], // {id, date, amount, category, note, createdAt, src}
+  incomes: [], // {id, date, amount, kind, note, src, createdAt}
+  merchantCat: {}, // {"二食堂":"eat"} —— 用户改过分类的商户会记住
     todos: [], // {id, text, due, done, createdAt}
     ui: { week: null }, // 课表当前查看的周
   };
@@ -2482,6 +2484,7 @@ const CATEGORIES = [
   { key: 'daily', name: '生活', icon: '🧻' },
   { key: 'call', name: '话费', icon: '📱' },
   { key: 'medical', name: '医疗', icon: '💊' },
+  { key: 'transfer', name: '转账', icon: '🔁' },
   { key: 'other', name: '其他', icon: '📦' },
 ];
 
@@ -2489,14 +2492,32 @@ const CATEGORY_MAP = Object.fromEntries(CATEGORIES.map((c) => [c.key, c]));
 
 /** 关键词 → 分类。命中越靠前优先级越高。 */
 const RULES = [
-  [/食堂|餐厅|餐饮|饭|面|粉|粥|饺|包子|麻辣烫|烧烤|火锅|烧烤|炸鸡|汉堡|肯德基|麦当劳|瑞幸|星巴克|奶茶|咖啡|蜜雪|茶百道|古茗|沪上|早点|早点|超市.*食品|水果|面包|蛋糕|酸奶|饮品|饮料/i, 'eat'],
-  [/地铁|公交|滴滴|出租车|高德打车|打车|哈啰|青桔|美团单车|共享单车|火车|高铁|12306|机票|加油站|停车/i, 'transport'],
-  [/淘宝|天猫|京东|拼多多|唯品会|闲鱼|超市|便利店|沃尔玛|丹尼斯|便利店|百货|文具|服装|鞋|无印|优衣库|名创/i, 'shop'],
-  [/图书|书店|当当|教材|打印|复印|文具|课程|网课|学费|考试|四六级|考证|知网|论文/i, 'study'],
-  [/电影|影院|游戏|steam|网吧|ktv|演出|门票|健身|球|音乐|会员|腾讯视频|爱奇艺|哔哩|B站|网易云|QQ音乐/i, 'fun'],
-  [/水费|电费|燃气|洗衣|洗澡|理发|快递|菜鸟|宿舍|物业|日用|纸巾|牙膏|洗护/i, 'daily'],
-  [/话费|流量|中国移动|中国联通|中国电信|宽带|校园网/i, 'call'],
-  [/医院|药|诊所|挂号|体检|牙科/i, 'medical'],
+  // 转账/红包优先：这类最好识别，且不该混进餐饮购物
+  [/转账|红包|收款|退款|退回|还款|信用卡还款/i, 'transfer'],
+
+  // 吃：校内食堂、外卖、快餐、饮品
+  [/食堂|餐厅|餐饮|小吃|快餐|外卖|饿了么|美团外卖|饭|面馆|拉面|米线|粉|粥|饺子|包子|馄饨|麻辣烫|冒菜|烧烤|火锅|炸鸡|汉堡|披萨|肯德基|麦当劳|华莱士|塔斯汀|正新|杨国福|张亮|沙县|兰州|黄焖鸡|螺蛳粉|瑞幸|星巴克|库迪|奶茶|咖啡|蜜雪|茶百道|古茗|沪上阿姨|喜茶|奈雪|一点点|书亦|酸奶|水果|面包|蛋糕|烘焙|早餐|早点|夜宵|饮品|饮料|便利店.*食品/i, 'eat'],
+
+  // 行：地铁、公交、打车、单车、火车
+  [/郑州地铁|地铁|轨道交通|公交|快速公交|BRT|滴滴|出租车|网约车|高德打车|曹操|T3|花小猪|哈啰|青桔|美团单车|共享单车|单车|火车|高铁|12306|铁路|机票|航空|机场|加油站|加油|停车|过路费|ETC|充电桩|校园班车/i, 'transport'],
+
+  // 买：电商、超市、服饰
+  [/淘宝|天猫|京东|拼多多|拼团|唯品会|闲鱼|得物|抖音商城|小红书|超市|便利店|罗森|全家|7-?11|十足|沃尔玛|大润发|丹尼斯|华润|百货|商场|文具|服装|鞋|帽|无印|优衣库|名创|数码|手机|耳机|充电器|数据线/i, 'shop'],
+
+  // 学：书、打印、课程
+  [/图书|书店|当当|教材|课本|打印|复印|文印|课程|网课|学费|培训|考试|四六级|考证|知网|论文|期刊|实验|耗材/i, 'study'],
+
+  // 玩：电影、游戏、会员、运动
+  [/电影|影院|影城|游戏|steam|网吧|电竞|KTV|演出|演唱会|门票|景区|健身|健身房|球馆|游泳|台球|剧本杀|密室|音乐|会员|腾讯视频|爱奇艺|优酷|哔哩|B站|网易云|QQ音乐|视频会员/i, 'fun'],
+
+  // 过日子：水电、洗衣、快递、日用
+  [/水费|电费|燃气|暖气|洗衣|洗浴|浴室|澡堂|开水|理发|美发|快递|菜鸟|驿站|顺丰|宿舍|物业|日用|纸巾|牙膏|洗护|毛巾|五金|维修/i, 'daily'],
+
+  // 通信：话费流量宽带
+  [/话费|流量|中国移动|中国联通|中国电信|联通|移动|电信|宽带|校园网|网费/i, 'call'],
+
+  // 医疗：医院药店
+  [/医院|药房|药店|诊所|挂号|门诊|体检|牙科|口腔|医保/i, 'medical'],
 ];
 
 function categorize(text) {
@@ -2505,6 +2526,17 @@ function categorize(text) {
     if (re.test(s)) return key;
   }
   return 'other';
+}
+
+/** 供自动记账使用：先用"学过的商户→分类"，再走关键词。 */
+function categorizeWithMemory(text, memory) {
+  const s = String(text || '');
+  if (memory && typeof memory === 'object') {
+    for (const [merchant, cat] of Object.entries(memory)) {
+      if (merchant && s.includes(merchant) && CATEGORY_MAP[cat]) return cat;
+    }
+  }
+  return categorize(s);
 }
 
 function normDate(raw) {
@@ -2631,76 +2663,135 @@ function parseCSVLocal(text) {
   return rows.filter((r) => r.some((c) => String(c).trim() !== ''));
 }
 
- return { CATEGORIES, CATEGORY_MAP, categorize, parseStatement }; })();
+ return { CATEGORIES, CATEGORY_MAP, categorize, categorizeWithMemory, parseStatement }; })();
 
 __mod["src/features/expense/auto.js"] = (function(){ /**
- * 自动记账：把微信/支付宝的通知文字解析成一笔支出。
+ * 自动记账：把通知文字解析成一笔账。
  *
- * 规则来自真机抓到的通知原文（2026-11），例如：
- *   支付宝「交易提醒」：你在智能自助服务有一笔0.07元的免密/自动扣款支付，点击领取6个支付宝积分。
+ * 数据来源（真机抓到的原文，2026-11）：
  *   支付宝「交易提醒」：你有一笔9.89元的支出，点击领取2个支付宝积分。
+ *   支付宝「交易提醒」：你在智能自助服务有一笔0.06元的免密/自动扣款支付。
+ *   支付宝「转账」：你已成功转账给 张三 100.00 元
  *   微信「微信支付」：向 二食堂 付款 12.50 元
+ *   微信「微信支付」：已支付 ¥12.50
+ *   微信「微信支付」：转账给 李四 ¥100.00
+ *   银行短信：您尾号1234的储蓄卡于11月5日20:30支出人民币12.50元，余额1000.00元。
  *
- * 原生只负责把通知原文（title/text）送进来，规则全在这里。
+ * 设计原则：
+ *   1. 宁可不记，也不要记错金额（金额必须明确带单位/货币符号）
+ *   2. 收入/退款也要记下来（以前直接丢掉，用户以为"漏记"）
+ *   3. 尽量抽出商户名，交给分类器判断类别
  */
 
-/** 像支付通知的关键词（微信聊天消息也会走通知，必须靠它过滤）。 */
-const PAY_WORDS = /(支付|付款|支出|扣款|消费|交易|转账|收款|到账|退款)/;
+/** 出现这些词才可能是账目（微信聊天里也会说"付款"，必须过滤） */
+const PAY_WORDS = /(支付|付款|支出|扣款|消费|交易|转账|收款|到账|退款|入账|还款|缴费|充值)/;
 
-/** 收入方向（v1 只记支出，收入先不落账）。 */
-const INCOME_WORDS = /(收款|到账|退款|收入|转入|入账|红包)/;
+/** 支出方向 */
+const OUT_WORDS = /(支付|付款|支出|扣款|消费|转出|转账给|已支付|付款成功|支付成功|退款给|还款|缴费|充值成功)/;
+/** 收入方向 */
+const IN_WORDS = /(收款|到账|退款|收入|转入|入账|红包|你已收款|收款成功|退回|退还)/;
+/** 营销/非账目噪音（真实支付通知里也可能带"积分"，所以只在没有强支付词时才判噪音） */
+const NOISE = /(优惠券|立减金|免费领取|领红包|红包雨|满\d+减|限时|秒杀|抽奖|会员日|活动|广告|失效|过期|即将到期|快去使用)/;
+const STRONG_PAY = /(支付成功|付款成功|已支付|已扣款|扣款成功|支出|转账成功|收款成功|到账|退款成功)/;
 
-/** 金额：「¥12.50」「12.50元」「￥12」 */
-const AMOUNT_RE = /(?:¥|￥)\s*(\d{1,6}(?:\.\d{1,2})?)|(\d{1,6}(?:\.\d{1,2})?)\s*元/;
+/**
+ * 金额：优先带货币符号的，其次「12.50元」，再看「支出12.50」这种。
+ * 用带捕获组的多条正则分别尝试，避免把日期里的数字当成金额。
+ */
+const AMOUNT_PATTERNS = [
+  /(?:¥|￥|RMB)\s*([\d,]+(?:\.\d{1,2})?)/i,
+  /([\d,]+(?:\.\d{1,2})?)\s*元/,
+  /(?:支出|付款|支付|扣款|消费|转入|转出|收款|到账|金额)[:：\s]*([\d,]+(?:\.\d{1,2})?)/,
+];
 
-/** 明显不是消费的营销文案（注意：不要用「积分」「点击领取」，真实支付通知里也带这些词）。 */
-const NOISE = /(红包[^。]{0,8}(失效|可用)|优惠券|立减金|免费领取|领红包)/;
+/** 商户抽取：按命中优先级排列 */
+const MERCHANT_PATTERNS = [
+  /(?:转账给|转给|付款给|支付给)\s*([^\s，,。;；:：]{1,20})/,
+  /(?:向)\s*([^\s，,。;；:：]{1,20})\s*(?:付款|支付|转账|消费)/,
+  /(?:在)\s*([^\s，,。;；:：]{1,20})\s*(?:有一笔|消费|支付|付款)/,
+  /(?:商户|商家|收款方|交易对方)[-—:：\s]*([^\s，,。;；]{1,20})/,
+  /(?:^|\s)(?:支付宝|微信支付)[-—:：]\s*([^\s，,。;；]{1,20})/,
+  /([^\s，,。;；:：]{2,20})\s*(?:商户|便利店|超市|食堂|餐厅|店)/,
+];
 
-/** 从各种句式里猜商户名。 */
 function pickMerchant(text) {
-  const patterns = [
-    /(?:向|在)\s*([^\s，,。:：]{2,20})\s*(?:付款|支付|消费|转账|支出|有一笔|购买)/,
-    /(?:商户|商家)[-—:：\s]*([^\s，,。]{2,20})/,
-    /(?:支付给|付款给)\s*([^\s，,。]{2,20})/,
-    /(?:支付宝|微信支付)[:：]\s*([^\s，,。]{2,20})/,
-  ];
-  for (const re of patterns) {
+  for (const re of MERCHANT_PATTERNS) {
     const m = text.match(re);
-    if (m && m[1] && !/^\d+$/.test(m[1])) return m[1].trim();
+    if (m && m[1]) {
+      const v = m[1].trim().replace(/[的了吗呀]+$/, '');
+      // 过滤掉"你/我/账户/余额"这类非商户词
+      if (v && !/^(你|我|他|她|账户|余额|银行卡|零钱|花呗|余额宝)$/.test(v) && !/^\d+$/.test(v)) {
+        return v;
+      }
+    }
   }
   return '';
 }
 
+function pickAmount(text) {
+  for (const re of AMOUNT_PATTERNS) {
+    const m = text.match(re);
+    if (!m) continue;
+    const v = Number(String(m[1]).replace(/,/g, ''));
+    if (Number.isFinite(v) && v > 0 && v <= 1000000) return v;
+  }
+  return 0;
+}
+
+/** 判断来源，便于给分类器做提示 */
+function pickSource(pkg, text) {
+  const p = String(pkg || '');
+  if (p.includes('tencent.mm')) return '微信';
+  if (p.includes('Alipay') || p.includes('alipay')) return '支付宝';
+  if (p.includes('unionpay') || p.includes('UnionPay')) return '云闪付';
+  if (p.includes('mms') || p.includes('messaging')) return '短信';
+  if (/支付宝/.test(text)) return '支付宝';
+  if (/微信/.test(text)) return '微信';
+  if (/(银行|储蓄卡|信用卡|尾号)/.test(text)) return '银行';
+  return '';
+}
+
 /**
- * @param {{pkg?:string,title?:string,text?:string,at?:number}} n
- * @returns {{amount:number, income:boolean, merchant:string, text:string}|null}
+ * @param {{pkg?:string,title?:string,text?:string,at?:number,key?:string}} n
+ * @returns {{amount:number, income:boolean, merchant:string, source:string,
+ *            kind:'expense'|'income'|'refund'|'transfer', text:string}|null}
  */
 function parseNotify(n) {
   if (!n) return null;
-  const text = `${n.title || ''} ${n.text || ''}`.replace(/\s+/g, ' ').trim();
-  if (!text || !PAY_WORDS.test(text)) return null;
+  const raw = `${n.title || ''} ${n.text || ''}`.replace(/\s+/g, ' ').trim();
+  if (!raw || !PAY_WORDS.test(raw)) return null;
 
-  const m = text.match(AMOUNT_RE);
-  if (!m) return null;
-  const amount = Number(m[1] || m[2]);
-  if (!(amount > 0) || amount > 100000) return null;
+  const amount = pickAmount(raw);
+  if (!amount) return null;
 
-  // 「4元红包今晚失效」这类营销消息不记账
-  if (NOISE.test(text) && !/支出|支付成功|付款|扣款/.test(text)) return null;
+  // 明显是广告：没有"强支付词"就丢掉
+  if (NOISE.test(raw) && !STRONG_PAY.test(raw)) return null;
 
-  const income = INCOME_WORDS.test(text);
-  return { amount, income, merchant: pickMerchant(text), text };
+  const isRefund = /(退款|退回|退还)/.test(raw);
+  const isTransfer = /(转账|转给|转入|转出)/.test(raw);
+  const income = isRefund || IN_WORDS.test(raw) || (!OUT_WORDS.test(raw) && IN_WORDS.test(raw));
+
+  let kind = 'expense';
+  if (isRefund) kind = 'refund';
+  else if (isTransfer) kind = 'transfer';
+  if (income && kind === 'expense') kind = 'income';
+
+  const merchant = pickMerchant(raw);
+  return {
+    amount,
+    income,
+    merchant,
+    source: pickSource(n.pkg, raw),
+    kind,
+    text: raw,
+  };
 }
 
  return { parseNotify }; })();
 
 __mod["src/features/expense/view.js"] = (function(){ /**
  * 记账页面：快速记一笔 + 月度汇总 + 账单导入。
- */
-const { getState, update, uid } = __mod["src/util/store.js"];
-const { todayISO, md, relativeDay, diffDays } = __mod["src/util/date.js"];
-const { h, money, toast, readTextFile, esc } = __mod["src/util/format.js"];
-const { CATEGORIES, CATEGORY_MAP, parseStatement } = __mod["src/features/expense/import.js"];
+ */const { getState, update, uid } = __mod["src/util/store.js"];const { todayISO, md, relativeDay, diffDays } = __mod["src/util/date.js"];const { h, money, toast, readTextFile, esc } = __mod["src/util/format.js"];const { CATEGORIES, CATEGORY_MAP, parseStatement } = __mod["src/features/expense/import.js"];
 let viewMonth = todayISO().slice(0, 7); // 'YYYY-MM'
 
 function renderExpense(root) {
@@ -2758,13 +2849,22 @@ function renderExpense(root) {
   }
 
   /* 汇总 */
+  const incomes = (state.incomes || []).filter((e) => (e.date || '').startsWith(month));
+  const incomeTotal = incomes.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+
   frag.appendChild(
     h('div.card.hero', [
       h('div.tiny', '本月支出'),
       h('div.summary-num', { style: { marginTop: '2px' } }, money(total)),
       h('div.muted', { style: { marginTop: '4px' } },
         list.length ? `日均 ${money(total / Math.max(1, activeDays(month)))} · 最大一笔 ${money(maxOf(list))}` : '还没有记录'),
-    ])
+      incomeTotal > 0
+        ? h('div.row.between', { style: { marginTop: '10px', paddingTop: '10px', borderTop: '1px solid #EEF0F4' } }, [
+            h('span.tiny', `本月收入 · ${incomes.length} 笔`),
+            h('span.money', { style: { color: '#2F9E6E' } }, '+' + money(incomeTotal)),
+          ])
+        : null,
+    ].filter(Boolean))
   );
 
   /* 快速记账 */
@@ -2999,6 +3099,27 @@ function renderExpense(root) {
       h('p.muted', { style: { margin: '2px 0 12px' } }, `${md(e.date)} · ${cat.icon} ${cat.name}`),
       h('div.kv', [h('span', '备注'), h('span.v', e.note || '—')]),
       h('div.kv', [h('span', '来源'), h('span.v', srcLabel(e.src))]),
+      h('div.section-title', { style: { marginTop: '14px' } }, [h('span', '改成哪一类'), h('span.tiny', '会记住这个商户')]),
+      h('div.chips', { style: { gridTemplateColumns: 'repeat(3, 1fr)' } },
+        CATEGORIES.map((c) =>
+          h(`button.chip${c.key === e.category ? '.on' : ''}`, {
+            onclick: () => {
+              update((s) => {
+                const it = s.expenses.find((x) => x.id === e.id);
+                if (it) it.category = c.key;
+                // 记住：下次同一个商户自动归到这一类
+                const key = (e.note || '').trim();
+                if (key && key !== '自动记账') {
+                  s.merchantCat = s.merchantCat || {};
+                  s.merchantCat[key] = c.key;
+                }
+              });
+              mask.remove();
+              toast(`已改为「${c.name}」`);
+            },
+          }, `${c.icon} ${c.name}`)
+        )
+      ),
       h('div', { style: { height: '14px' } }),
       h('button.btn.block.danger', {
         onclick: () => {
@@ -3660,19 +3781,7 @@ __mod["src/main.js"] = (function(){ /**
  *   1. 在 src/features/<名字>/ 下写 view.js（导出 renderXxx(root)）
  *   2. 在下方 ROUTES 里加一项
  *   3. 在 index.html 的 tabbar 里加一个 tab
- */
-const { getState, seedIfEmpty, subscribe, update } = __mod["src/util/store.js"];
-const { toast } = __mod["src/util/format.js"];
-const { SEED_COURSES } = __mod["src/features/timetable/data.js"];
-const { renderTimetable } = __mod["src/features/timetable/view.js"];
-const { renderExpense } = __mod["src/features/expense/view.js"];
-const { renderTodo } = __mod["src/features/todo/view.js"];
-const { renderSettings } = __mod["src/features/settings/view.js"];
-const { rowsToCourses } = __mod["src/features/timetable/eams.js"];
-const { parseNotify } = __mod["src/features/expense/auto.js"];
-const { categorize } = __mod["src/features/expense/import.js"];
-const { todayISO, toISO } = __mod["src/util/date.js"];
-const { uid } = __mod["src/util/store.js"];
+ */const { getState, seedIfEmpty, subscribe, update } = __mod["src/util/store.js"];const { toast } = __mod["src/util/format.js"];const { SEED_COURSES } = __mod["src/features/timetable/data.js"];const { renderTimetable } = __mod["src/features/timetable/view.js"];const { renderExpense } = __mod["src/features/expense/view.js"];const { renderTodo } = __mod["src/features/todo/view.js"];const { renderSettings } = __mod["src/features/settings/view.js"];const { rowsToCourses } = __mod["src/features/timetable/eams.js"];const { parseNotify } = __mod["src/features/expense/auto.js"];const { categorize, categorizeWithMemory } = __mod["src/features/expense/import.js"];const { todayISO, toISO } = __mod["src/util/date.js"];const { uid } = __mod["src/util/store.js"];
 const ROUTES = {
   timetable: { title: '课表', render: renderTimetable },
   expense: { title: '记账', render: renderExpense },
@@ -3780,7 +3889,7 @@ window.__campusImport = function (raw) {
 /** 一条通知 → 一笔账单。返回是否真的入库。 */
 function applyExpense(notif) {
   const hit = parseNotify(notif);
-  if (!hit || hit.income) return false;
+  if (!hit) return false;
 
   const when = new Date(Number(notif.at) || Date.now());
   const date = toISO(when);
@@ -3791,7 +3900,7 @@ function applyExpense(notif) {
   // 同一笔付款重复推送 → key 相同 → 跳过；
   // 同一时间买两次（金额一样）→ key 不同 → 两笔都记。
   const dup = notifKey
-    ? state.expenses.some((e) => e.notifKey === notifKey)
+    ? state.expenses.some((e) => e.notifKey === notifKey) || (state.incomes || []).some((e) => e.notifKey === notifKey)
     : state.expenses.some(
         (e) =>
           e.src === 'auto' &&
@@ -3802,12 +3911,31 @@ function applyExpense(notif) {
       );
   if (dup) return false;
 
+  // 收入/退款：单独存一份，不混进"支出"里，但也不会像以前那样直接丢掉
+  if (hit.income) {
+    update((s) => {
+      s.incomes = s.incomes || [];
+      s.incomes.push({
+        id: uid(),
+        date,
+        amount: hit.amount,
+        kind: hit.kind || 'income',
+        note: hit.merchant || hit.source || '收入',
+        src: 'auto',
+        notifKey: notifKey || undefined,
+        createdAt: when.getTime(),
+      });
+    });
+    toast(`记了一笔收入 ¥${hit.amount.toFixed(2)}`);
+    return true;
+  }
+
   update((s) => {
     s.expenses.push({
       id: uid(),
       date,
       amount: hit.amount,
-      category: categorize(`${hit.merchant} ${hit.text}`),
+      category: categorizeWithMemory(`${hit.merchant} ${hit.text}`, s.merchantCat),
       note: hit.merchant || '自动记账',
       src: 'auto',
       notifKey: notifKey || undefined,
