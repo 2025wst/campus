@@ -253,7 +253,7 @@ public class CheckinService extends AccessibilityService {
             CharSequence p = root.getPackageName();
             pkgName = p == null ? null : p.toString();
         }
-        if (!PKG_CHAOXING.contentEquals(pkgName)) {
+        if (pkgName == null || !PKG_CHAOXING.equals(pkgName)) {
             bringChaoxingToFront(root, elapsed, pkgName);
             recycle(root);
             return;
