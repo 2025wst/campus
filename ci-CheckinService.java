@@ -566,6 +566,12 @@ public class CheckinService extends AccessibilityService {
         CheckinStatus.setLastResult(message);
         CheckinStatus.appendLog(message);
         CheckinStatus.recordResult(success, message);
+        if (success) {
+            try {
+                CheckinStatus.markDoneToday(getApplicationContext());
+            } catch (Throwable ignored) {
+            }
+        }
         releaseWakeLock();
         // 失败一定要让人看见（静默失败是这套方案最大的风险）
         try {

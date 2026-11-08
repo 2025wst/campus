@@ -68,6 +68,12 @@
             </intent-filter>
         </receiver>
 
+        <!-- 巡检任务（第三道保险）：JobScheduler 每 15 分钟醒一次 -->
+        <service
+            android:name=".CheckinJob"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
+
         <!-- 开机自启，重排闹钟 -->
         <receiver
             android:name=".BootReceiver"

@@ -10,6 +10,7 @@ public class BootReceiver extends BroadcastReceiver {
     public void onReceive(Context context, Intent intent) {
         try {
             CheckinAlarm.ensureScheduled(context);
+            CheckinJob.schedule(context);
             CheckinStatus.appendLog("开机完成，已重新安排定时");
         } catch (Throwable ignored) {
         }

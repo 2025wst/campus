@@ -28,10 +28,12 @@ public final class CheckinStatus {
     private static final String KEY_HISTORY = "history";
     private static final String KEY_LAST = "last_result";
     private static final String KEY_ENABLED = "accessibility_enabled";
+    private static final String KEY_DONE_DATE = "done_date";
     private static final int MAX_LOG = 120;
     private static final int MAX_HISTORY = 30;
 
     private static final SimpleDateFormat TS = new SimpleDateFormat("MM-dd HH:mm:ss", Locale.CHINA);
+    private static final SimpleDateFormat DAY = new SimpleDateFormat("yyyy-MM-dd", Locale.CHINA);
 
     private static volatile boolean accessibilityEnabled = false;
     private static volatile boolean running = false;
@@ -47,6 +49,26 @@ public final class CheckinStatus {
     }
 
     /* ---------------- 基础状态 ---------------- */
+
+    /** 记下"今天已经签到成功"，后续闹钟据此跳过。 */
+    public static void markDoneToday(Context ctx) {
+        try {
+            ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+                    .edit().putString(KEY_DONE_DATE, DAY.format(new Date())).apply();
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** 今天是否已经打上卡。 */
+    public static boolean isDoneToday(Context ctx) {
+        try {
+            String saved = ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+                    .getString(KEY_DONE_DATE, "");
+            return DAY.format(new Date()).equals(saved);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
 
     public static boolean isAccessibilityEnabled() {
         return accessibilityEnabled;

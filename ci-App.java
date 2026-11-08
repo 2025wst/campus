@@ -15,6 +15,7 @@ public class App extends Application {
         CheckinStatus.appendLog("App 启动");
         Notify.ensureChannel(this);
         CheckinAlarm.ensureScheduled(this);
+        CheckinJob.schedule(this);
     }
 
     public static Context get() {
