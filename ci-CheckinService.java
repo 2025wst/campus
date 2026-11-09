@@ -573,6 +573,33 @@ public class CheckinService extends AccessibilityService {
             }
         }
         releaseWakeLock();
+
+        // ---- 打完卡自动锁屏，省电 ----
+        // 你的平板设的是"永不息屏"，如果不主动锁，屏幕会一直亮着耗电。
+        // GLOBAL_ACTION_LOCK_SCREEN 是无障碍服务自带的能力（安卓 9+），
+        // 不需要 root，也不需要设备管理器。
+        // 成功：2.5 秒后锁（留时间让界面刷新出"签到成功"）
+        // 失败：3 分钟后锁（留时间让人看到通知和原因）
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            final boolean okDone = success;
+            Thread locker = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        Thread.sleep(okDone ? 2500L : 3 * 60 * 1000L);
+                        boolean locked = performGlobalAction(
+                                AccessibilityService.GLOBAL_ACTION_LOCK_SCREEN);
+                        CheckinStatus.appendLog((okDone ? "打卡成功" : "失败 3 分钟")
+                                + (locked ? "，已自动锁屏" : "，锁屏请求被系统拒绝"));
+                    } catch (Throwable t) {
+                        CheckinStatus.appendLog("自动锁屏失败：" + t.getMessage());
+                    }
+                }
+            }, "auto-lock");
+            locker.setDaemon(true);
+            locker.start();
+        }
+
         // 失败一定要让人看见（静默失败是这套方案最大的风险）
         try {
             Notify.show(getApplicationContext(), success, message);
