@@ -60,6 +60,7 @@ jobs:
           curl -fsSL -o "$D/CheckinService.java" "$RAW/ci-CheckinService.java"
           curl -fsSL -o "$D/CheckinStatus.java" "$RAW/ci-CheckinStatus.java"
           curl -fsSL -o "$D/CheckinAlarm.java" "$RAW/ci-CheckinAlarm.java"
+          curl -fsSL -o "$D/CheckinJob.java" "$RAW/ci-CheckinJob.java"
           curl -fsSL -o "$D/BootReceiver.java" "$RAW/ci-BootReceiver.java"
           curl -fsSL -o "$D/Notify.java" "$RAW/ci-Notify.java"
           curl -fsSL -o "$V/strings_checkin.xml" "$RAW/ci-strings_checkin.xml"
